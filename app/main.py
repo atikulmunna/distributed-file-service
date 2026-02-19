@@ -89,6 +89,12 @@ if not request_logger.handlers:
     handler.setFormatter(logging.Formatter("%(message)s"))
     request_logger.addHandler(handler)
 request_logger.setLevel(logging.INFO)
+audit_logger = logging.getLogger("dfs.audit")
+if not audit_logger.handlers:
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    audit_logger.addHandler(handler)
+audit_logger.setLevel(logging.INFO)
 MIN_MULTIPART_PART_SIZE = 5 * 1024 * 1024
 
 
@@ -107,6 +113,11 @@ def _upload_id(request: Request) -> str | None:
 def _log_event(payload: dict) -> None:
     payload.setdefault("trace_id", _trace_id())
     request_logger.info(json.dumps(payload, sort_keys=True, separators=(",", ":")))
+
+
+def _audit_event(payload: dict) -> None:
+    payload.setdefault("trace_id", _trace_id())
+    audit_logger.info(json.dumps(payload, sort_keys=True, separators=(",", ":")))
 
 
 def _trace_id() -> str | None:
@@ -253,6 +264,7 @@ def run_cleanup(
     responses={**COMMON_ERROR_RESPONSES, 409: {"model": ErrorResponse, "description": "Idempotency conflict"}},
 )
 def init_upload(
+    request: Request,
     payload: InitUploadRequest,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     user: AuthUser = Depends(require_api_user),
@@ -316,6 +328,19 @@ def init_upload(
         )
     db.commit()
     db.refresh(upload)
+    _audit_event(
+        {
+            "event": "audit",
+            "action": "upload_init",
+            "request_id": _request_id(request),
+            "upload_id": upload.id,
+            "user_id": user.user_id,
+            "status": upload.status,
+            "file_size": upload.file_size,
+            "chunk_size": upload.chunk_size,
+            "total_chunks": upload.total_chunks,
+        }
+    )
 
     return InitUploadResponse(
         upload_id=upload.id,
@@ -460,6 +485,7 @@ async def upload_chunk(
     },
 )
 def complete_upload(
+    request: Request,
     upload_id: str,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     user: AuthUser = Depends(require_api_user),
@@ -494,6 +520,17 @@ def complete_upload(
                     )
                 )
                 db.commit()
+        _audit_event(
+            {
+                "event": "audit",
+                "action": "upload_complete",
+                "request_id": _request_id(request),
+                "upload_id": upload.id,
+                "user_id": user.user_id,
+                "status": upload.status,
+                "idempotent_replay": True,
+            }
+        )
         return CompleteUploadResponse(upload_id=upload.id, status=upload.status)
     if upload.status != UploadStatus.in_progress.value:
         raise HTTPException(status_code=409, detail="cannot complete upload from current state")
@@ -532,6 +569,17 @@ def complete_upload(
             )
         )
     db.commit()
+    _audit_event(
+        {
+            "event": "audit",
+            "action": "upload_complete",
+            "request_id": _request_id(request),
+            "upload_id": upload.id,
+            "user_id": user.user_id,
+            "status": upload.status,
+            "idempotent_replay": False,
+        }
+    )
     return CompleteUploadResponse(upload_id=upload.id, status=upload.status)
 
 
@@ -599,6 +647,7 @@ def _stream_bytes_for_range(chunks: list[Chunk], start: int, end: int) -> Iterat
     },
 )
 def download(
+    request: Request,
     upload_id: str,
     range: str | None = Header(default=None),
     user: AuthUser = Depends(require_api_user),
@@ -613,6 +662,17 @@ def download(
         raise HTTPException(status_code=500, detail="upload metadata is inconsistent")
 
     headers = {"Accept-Ranges": "bytes"}
+    _audit_event(
+        {
+            "event": "audit",
+            "action": "download",
+            "request_id": _request_id(request),
+            "upload_id": upload.id,
+            "user_id": user.user_id,
+            "status": upload.status,
+            "range_requested": bool(range),
+        }
+    )
     if range:
         start, end = _parse_range(range, upload.file_size)
         headers["Content-Range"] = f"bytes {start}-{end}/{upload.file_size}"

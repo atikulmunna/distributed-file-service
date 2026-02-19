@@ -13,6 +13,7 @@ This repository contains a runnable MVP backend for chunked uploads/downloads ba
 - Download streaming with basic HTTP Range support
 - Backpressure (`429`) on queue/global/per-upload inflight limits
 - Prometheus metrics at `/metrics`
+- Structured audit logs (`dfs.audit`) for init/complete/download actions
 
 Storage defaults to local filesystem, and DB defaults to SQLite.
 You can switch to PostgreSQL via `DATABASE_URL` and use S3-compatible backends (`s3` or `r2`).
