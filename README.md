@@ -2,7 +2,11 @@
 
 A production-oriented backend service for high-throughput, resumable file uploads and downloads using chunked transfer, persistent metadata, backpressure controls, pluggable durable queue backends, and observability-first operations.
 
-## What This Project Solves
+## Demo Video
+[![Distributed File Service Demo](https://img.youtube.com/vi/INt9tzYnCMo/hqdefault.jpg)](https://youtu.be/INt9tzYnCMo)
+[Watch on YouTube](https://youtu.be/INt9tzYnCMo)
+
+## What This Project Does
 - Uploads large files reliably using chunked transfer and retries.
 - Supports resume/recovery (`missing-chunks`) after interrupted uploads.
 - Supports full and ranged downloads from completed uploads.
