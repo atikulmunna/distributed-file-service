@@ -15,6 +15,7 @@ This repository contains a runnable MVP backend for chunked uploads/downloads ba
 - Prometheus metrics at `/metrics`
 - Structured audit logs (`dfs.audit`) for init/complete/download actions
 - Request-latency histogram (`http_request_duration_seconds`) for p95/p99 tracking
+- Optional adaptive worker autoscaling with cooldown/hysteresis
 
 Storage defaults to local filesystem, and DB defaults to SQLite.
 You can switch to PostgreSQL via `DATABASE_URL` and use S3-compatible backends (`s3` or `r2`).
@@ -77,6 +78,13 @@ Environment variables (defaults in `app/config.py`):
 - `MAX_GLOBAL_INFLIGHT_CHUNKS`
 - `TASK_QUEUE_MAXSIZE`
 - `WORKER_COUNT`
+- `AUTOSCALE_ENABLED` (`true`/`false`)
+- `MIN_WORKERS`
+- `MAX_WORKERS`
+- `AUTOSCALE_COOLDOWN_SECONDS`
+- `SCALE_UP_QUEUE_THRESHOLD`
+- `SCALE_UP_UTILIZATION_THRESHOLD`
+- `SCALE_DOWN_UTILIZATION_THRESHOLD`
 - `CLEANUP_ENABLED` (`true`/`false`)
 - `CLEANUP_INTERVAL_SECONDS`
 - `STALE_UPLOAD_TTL_SECONDS`

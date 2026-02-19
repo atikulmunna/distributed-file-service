@@ -36,6 +36,13 @@ class Settings(BaseSettings):
     max_global_inflight_chunks: int = 128
     task_queue_maxsize: int = 512
     worker_count: int = 16
+    autoscale_enabled: bool = False
+    min_workers: int = 8
+    max_workers: int = 32
+    autoscale_cooldown_seconds: int = 15
+    scale_up_queue_threshold: int = 1
+    scale_up_utilization_threshold: float = 0.8
+    scale_down_utilization_threshold: float = 0.2
     cleanup_enabled: bool = False
     cleanup_interval_seconds: int = 900
     stale_upload_ttl_seconds: int = 86400

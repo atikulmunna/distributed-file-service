@@ -64,6 +64,21 @@ class BackpressureExecutor:
 
         return self.executor.submit(wrapped)
 
+    def snapshot(self) -> tuple[int, int, int]:
+        with self._lock:
+            return self._queued, self._inflight, self.executor._max_workers
+
+    def resize(self, workers: int) -> None:
+        if workers <= 0:
+            return
+        with self._lock:
+            if workers == self.executor._max_workers:
+                return
+            self.executor._max_workers = workers
+            self.executor._adjust_thread_count()
+            worker_count.set(workers)
+            worker_busy_count.set(min(self._inflight, workers))
+
 
 executor = BackpressureExecutor(
     workers=settings.worker_count,
