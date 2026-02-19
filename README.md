@@ -4,6 +4,7 @@ A production-oriented backend service for high-throughput, resumable file upload
 
 ## Demo Video
 [![Distributed File Service Demo](https://img.youtube.com/vi/INt9tzYnCMo/hqdefault.jpg)](https://youtu.be/INt9tzYnCMo)
+
 [Watch on YouTube](https://youtu.be/INt9tzYnCMo)
 
 ## What This Project Does
@@ -69,7 +70,74 @@ flowchart LR
     classDef ops fill:#EDE9FE,stroke:#6D28D9,color:#4C1D95,stroke-width:1px;
 ```
 
----
+### Detailed Upload Flow (Chunk Split to Persist)
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as Client / UI
+    participant A as API (FastAPI)
+    participant L as Limiters
+    participant Q as Queue (Memory/Redis/SQS)
+    participant W as Worker/Consumer
+    participant S as Storage (Local/S3/R2)
+    participant D as DB
+
+    U->>U: Split file into chunks (chunk_size)
+    U->>A: POST /v1/uploads/init (file metadata)
+    A->>D: Insert upload row (INITIATED)
+    A-->>U: upload_id, total_chunks
+
+    loop for each chunk_index
+      U->>A: PUT /chunks/{chunk_index} + bytes + checksum
+      A->>L: Admission checks (queue, inflight, fair-share)
+      alt QUEUE_BACKEND=memory
+        A->>W: Submit chunk task directly
+      else QUEUE_BACKEND=redis/sqs
+        A->>Q: Enqueue durable task
+        Q->>W: Consumer dequeues task
+      end
+      W->>S: Write chunk object
+      W->>D: Upsert chunk metadata (status=UPLOADED)
+      A-->>U: 202 Accepted
+    end
+
+    U->>A: POST /complete
+    A->>D: Verify all chunk rows present
+    opt file_checksum_sha256 provided
+      A->>S: Read chunks in order
+      A->>A: Recompute file SHA-256 and compare
+    end
+    opt multipart enabled
+      A->>S: Complete multipart object
+    end
+    A->>D: Mark upload COMPLETED
+    A-->>U: 200 COMPLETED
+```
+
+### Detailed Download Flow (Chunk Reassembly to Stream)
+```mermaid
+sequenceDiagram
+    autonumber
+    participant U as Client / UI
+    participant A as API (FastAPI)
+    participant D as DB
+    participant S as Storage (Local/S3/R2)
+
+    U->>A: GET /download (optional Range)
+    A->>D: Validate upload exists, owner match, status=COMPLETED
+    A->>D: Read chunk list ordered by chunk_index
+    alt Range header present
+      A->>A: Compute byte window -> chunk boundaries
+    end
+    loop chunk order
+      A->>S: Read chunk object
+      A->>A: Slice bytes if ranged request
+      A-->>U: Stream bytes (ordered reconstruction)
+    end
+    A-->>U: End stream + Content-Disposition(original file name)
+```
+
+--- 
 
 ## Repository Structure
 
