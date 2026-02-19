@@ -25,6 +25,10 @@ class Settings(BaseSettings):
     max_global_inflight_chunks: int = 128
     task_queue_maxsize: int = 512
     worker_count: int = 16
+    cleanup_enabled: bool = False
+    cleanup_interval_seconds: int = 900
+    stale_upload_ttl_seconds: int = 86400
+    idempotency_ttl_seconds: int = 86400
 
 
 settings = Settings()

@@ -1,5 +1,6 @@
 import math
 import time
+import asyncio
 import hashlib
 import json
 import logging
@@ -16,6 +17,7 @@ from app.auth import AuthUser, require_api_user
 from app.config import settings
 from app.db import get_db
 from app.limits import PerUploadInflightLimiter
+from app.maintenance import cleanup_once
 from app.metrics import (
     bytes_uploaded_total,
     chunks_uploaded_total,
@@ -42,12 +44,33 @@ from app.schemas import (
     MissingChunksResponse,
     UploadChunkResponse,
 )
+from app.db import SessionLocal
 from app.storage import storage
 from app.worker import executor
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    stop_event = asyncio.Event()
+    task = None
+
+    async def _periodic_cleanup_loop() -> None:
+        while not stop_event.is_set():
+            try:
+                with SessionLocal() as db:
+                    cleanup_once(db)
+            except Exception as exc:
+                _log_event({"event": "cleanup_error", "detail": str(exc), "error_class": "maintenance_error"})
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=max(1, settings.cleanup_interval_seconds))
+            except asyncio.TimeoutError:
+                pass
+
+    if settings.cleanup_enabled:
+        task = asyncio.create_task(_periodic_cleanup_loop())
     yield
+    stop_event.set()
+    if task:
+        await task
 
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
@@ -196,6 +219,18 @@ def health() -> dict[str, str]:
 @app.get("/metrics")
 def metrics() -> Response:
     return metrics_response()
+
+
+@app.post(
+    "/v1/admin/cleanup",
+    responses={**COMMON_ERROR_RESPONSES},
+)
+def run_cleanup(
+    user: AuthUser = Depends(require_api_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    stats = cleanup_once(db)
+    return {"status": "ok", "requested_by": user.user_id, **stats}
 
 
 @app.post(

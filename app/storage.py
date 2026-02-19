@@ -28,6 +28,12 @@ class ChunkStorage:
     def read_chunk(self, s3_key: str) -> bytes:
         raise NotImplementedError
 
+    def list_keys(self, prefix: str = "") -> list[str]:
+        raise NotImplementedError
+
+    def delete_key(self, key: str) -> None:
+        raise NotImplementedError
+
 
 class LocalChunkStorage(ChunkStorage):
     def __init__(self, root: str) -> None:
@@ -48,6 +54,18 @@ class LocalChunkStorage(ChunkStorage):
 
     def read_chunk(self, s3_key: str) -> bytes:
         return (self.root / s3_key).read_bytes()
+
+    def list_keys(self, prefix: str = "") -> list[str]:
+        base = self.root / prefix if prefix else self.root
+        if not base.exists():
+            return []
+        root = self.root
+        return [str(path.relative_to(root)).replace("\\", "/") for path in base.rglob("*") if path.is_file()]
+
+    def delete_key(self, key: str) -> None:
+        target = self.root / key
+        if target.exists():
+            target.unlink()
 
 
 class S3ChunkStorage(ChunkStorage):
@@ -116,6 +134,26 @@ class S3ChunkStorage(ChunkStorage):
     def read_chunk(self, s3_key: str) -> bytes:
         obj = self.client.get_object(Bucket=self.bucket, Key=s3_key)
         return obj["Body"].read()
+
+    def list_keys(self, prefix: str = "") -> list[str]:
+        keys: list[str] = []
+        continuation_token = None
+        while True:
+            params = {"Bucket": self.bucket, "Prefix": prefix}
+            if continuation_token:
+                params["ContinuationToken"] = continuation_token
+            response = self.client.list_objects_v2(**params)
+            for item in response.get("Contents", []):
+                key = item.get("Key")
+                if key:
+                    keys.append(key)
+            if not response.get("IsTruncated"):
+                break
+            continuation_token = response.get("NextContinuationToken")
+        return keys
+
+    def delete_key(self, key: str) -> None:
+        self.client.delete_object(Bucket=self.bucket, Key=key)
 
 
 def build_storage() -> ChunkStorage:

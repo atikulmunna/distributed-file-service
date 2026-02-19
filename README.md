@@ -45,6 +45,10 @@ Environment variables (defaults in `app/config.py`):
 - `MAX_GLOBAL_INFLIGHT_CHUNKS`
 - `TASK_QUEUE_MAXSIZE`
 - `WORKER_COUNT`
+- `CLEANUP_ENABLED` (`true`/`false`)
+- `CLEANUP_INTERVAL_SECONDS`
+- `STALE_UPLOAD_TTL_SECONDS`
+- `IDEMPOTENCY_TTL_SECONDS`
 
 ## Database Migrations
 Apply latest schema:
@@ -65,6 +69,7 @@ All `/v1/*` endpoints require `X-API-Key` header.
 3. `POST /v1/uploads/{upload_id}/complete`
 4. `GET /v1/uploads/{upload_id}/missing-chunks`
 5. `GET /v1/uploads/{upload_id}/download`
+6. `POST /v1/admin/cleanup` (authenticated maintenance trigger)
 
 Standard error payload:
 ```json
