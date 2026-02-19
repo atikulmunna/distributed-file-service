@@ -1,27 +1,401 @@
-# Distributed File Service (Phase 1 MVP)
+# Distributed File Service
 
-This repository contains a runnable MVP backend for chunked uploads/downloads based on the simplified spec.
+A production-oriented backend service for high-throughput, resumable file uploads and downloads using chunked transfer, persistent metadata, backpressure controls, pluggable durable queue backends, and observability-first operations.
 
-## Implemented
-- Upload initialization
-- Parallel chunk upload via bounded worker pool
-- Retry loop for transient chunk write failures
-- Resume support (`missing-chunks`)
-- Upload completion validation
-- Optional checksum validation (chunk + full file)
-- Optional S3 multipart upload flow (`STORAGE_BACKEND=s3`)
-- Download streaming with basic HTTP Range support
-- Backpressure (`429`) on queue/global/per-upload inflight limits
-- Prometheus metrics at `/metrics`
-- Structured audit logs (`dfs.audit`) for init/complete/download actions
-- Request-latency histogram (`http_request_duration_seconds`) for p95/p99 tracking
-- Optional adaptive worker autoscaling with cooldown/hysteresis
-- Lightweight built-in web console at `/ui` for demo and manual validation
+## What This Project Solves
+- Uploads large files reliably using chunked transfer and retries.
+- Supports resume/recovery (`missing-chunks`) after interrupted uploads.
+- Supports full and ranged downloads from completed uploads.
+- Enforces ownership and API/JWT auth policies.
+- Applies layered throttling/backpressure to prevent overload.
+- Exposes metrics, structured logs, tracing correlation, and audit events.
+- Supports local storage, S3, and Cloudflare R2.
+- Supports in-memory queueing and external durable queue paths (Redis/SQS).
 
-Storage defaults to local filesystem, and DB defaults to SQLite.
-You can switch to PostgreSQL via `DATABASE_URL` and use S3-compatible backends (`s3` or `r2`).
+## Core Capabilities
+- Chunked upload lifecycle: `init -> upload chunks -> complete -> download`
+- Upload state machine: `INITIATED`, `IN_PROGRESS`, `COMPLETED`, `FAILED`, `ABORTED`
+- Idempotency support for init/chunk/complete APIs
+- Per-chunk checksum verification (`X-Chunk-SHA256`)
+- Optional full-file checksum verification (`file_checksum_sha256`)
+- Queue-level and inflight-level backpressure (`429` with reason headers)
+- Optional adaptive worker autoscaling
+- Optional cleanup job + admin-triggered cleanup API
+- Built-in operator web console (`/ui`, `/console`)
 
-## Run
+---
+
+## System Architecture
+```mermaid
+flowchart LR
+    C[Client / UI]:::client
+    API[FastAPI App\napp/main.py]:::api
+    AUTH[Auth Layer\napp/auth.py]:::security
+    LIMITS[Backpressure + Limits\napp/worker.py + app/limits.py]:::runtime
+    QUEUE[Durable Queue\nMemory / Redis / SQS\napp/durable_queue.py]:::queue
+    WORKERS[Chunk Workers\nThreadPool + Consumers]:::runtime
+    DB[(PostgreSQL / SQLite\nMetadata)]:::db
+    STORE[(Local FS / S3 / R2\nObject Storage)]:::storage
+    OBS[Observability\nMetrics + Logs + Tracing]:::obs
+    MAINT[Cleanup Service\napp/maintenance.py]:::ops
+
+    C -->|HTTP| API
+    API --> AUTH
+    API --> LIMITS
+    API --> DB
+    API --> OBS
+    API --> MAINT
+
+    LIMITS -->|direct mode| WORKERS
+    LIMITS -->|durable mode| QUEUE
+    QUEUE --> WORKERS
+
+    WORKERS --> STORE
+    WORKERS --> DB
+    API --> STORE
+
+    classDef client fill:#E0F2FE,stroke:#0284C7,color:#0C4A6E,stroke-width:1px;
+    classDef api fill:#ECFCCB,stroke:#4D7C0F,color:#365314,stroke-width:1px;
+    classDef security fill:#FCE7F3,stroke:#BE185D,color:#831843,stroke-width:1px;
+    classDef runtime fill:#FEF3C7,stroke:#D97706,color:#7C2D12,stroke-width:1px;
+    classDef queue fill:#F3E8FF,stroke:#7E22CE,color:#581C87,stroke-width:1px;
+    classDef db fill:#DBEAFE,stroke:#2563EB,color:#1E3A8A,stroke-width:1px;
+    classDef storage fill:#DCFCE7,stroke:#15803D,color:#14532D,stroke-width:1px;
+    classDef obs fill:#FFE4E6,stroke:#E11D48,color:#881337,stroke-width:1px;
+    classDef ops fill:#EDE9FE,stroke:#6D28D9,color:#4C1D95,stroke-width:1px;
+```
+
+---
+
+## Repository Structure
+
+### Application Modules (`app/`)
+- `app/main.py`
+: HTTP API, request lifecycle orchestration, middleware, exception handling, upload/download endpoints, lifecycle background loops (cleanup/autoscale/queue consumers), UI routes.
+
+- `app/config.py`
+: Typed environment configuration via `pydantic-settings`.
+
+- `app/db.py`
+: SQLAlchemy engine/session setup and request-scoped session dependency.
+
+- `app/models.py`
+: ORM models (`Upload`, `Chunk`, idempotency tables) and enums.
+
+- `app/schemas.py`
+: Pydantic request/response DTOs.
+
+- `app/auth.py`
+: API key and JWT auth resolution, principal rate limiting, admin authorization.
+
+- `app/storage.py`
+: Storage abstraction + implementations:
+  - local filesystem
+  - S3-compatible storage (AWS S3 / Cloudflare R2)
+
+- `app/worker.py`
+: Bounded `ThreadPoolExecutor` wrapper with queue and inflight admission control.
+
+- `app/limits.py`
+: Per-upload inflight limiter + fair-share limiter.
+
+- `app/durable_queue.py`
+: Queue abstraction and implementations:
+  - memory queue
+  - Redis list queue
+  - AWS SQS queue
+
+- `app/maintenance.py`
+: Cleanup logic (stale uploads, old idempotency keys, orphaned objects).
+
+- `app/metrics.py`
+: Prometheus metric declarations and `/metrics` response.
+
+- `app/tracing.py`
+: OpenTelemetry setup and OTLP exporter wiring.
+
+- `app/ui.py`
+: Embedded operator web console HTML/JS.
+
+### Infrastructure and Ops
+- `alembic/` + `alembic.ini`
+: Database migrations.
+
+- `docker-compose.yml`, `Dockerfile`
+: Containerized deployment for app + PostgreSQL + Redis.
+
+- `monitoring/alerts.yml`
+: Prometheus alert rules.
+
+- `monitoring/grafana/dashboards/dfs-overview.json`
+: Grafana dashboard template.
+
+### Tooling Scripts (`scripts/`)
+- `scripts/load_test.py`
+: Upload benchmark/load profile runner.
+
+- `scripts/verify_runtime_routes.py`
+: Runtime sanity checks (`/health`, `/version`, `/ui`).
+
+- `scripts/verify_queue_mode.py`
+: Queue backend preflight checks for memory/redis/sqs.
+
+### Test Suite (`tests/`)
+- Unit tests for storage, limits, auth, queue, autoscaling, logging.
+- API flow tests (init/chunk/complete/missing-chunks/download).
+- Optional live integration tests for R2, Redis queue, SQS queue.
+
+---
+
+## Upload/Download Lifecycle
+
+### 1) Initialize Upload
+`POST /v1/uploads/init`
+- Validates request.
+- Creates upload record.
+- Calculates `total_chunks = ceil(file_size/chunk_size)`.
+- Optionally starts multipart upload in S3/R2 when conditions are met.
+- Stores idempotency mapping (if header supplied).
+
+### 2) Upload Chunks
+`PUT /v1/uploads/{upload_id}/chunks/{chunk_index}`
+- Verifies ownership and state.
+- Validates bounds and content length.
+- Validates chunk checksum if `X-Chunk-SHA256` is present.
+- Performs idempotency conflict/replay checks.
+- Enforces per-upload and global backpressure.
+- Persists chunk either:
+  - directly via worker pool (`QUEUE_BACKEND=memory`), or
+  - via durable queue + consumer loops (`redis`/`sqs`).
+- Updates chunk metadata + upload state.
+
+### 3) Complete Upload
+`POST /v1/uploads/{upload_id}/complete`
+- Verifies all chunks were uploaded.
+- Optionally verifies full-file SHA-256 (`file_checksum_sha256`).
+- Completes multipart object in S3/R2 when applicable.
+- Marks upload `COMPLETED`.
+
+### 4) Resume / Missing Chunks
+`GET /v1/uploads/{upload_id}/missing-chunks`
+- Returns gaps in uploaded chunk index set.
+
+### 5) Download
+`GET /v1/uploads/{upload_id}/download`
+- Requires `COMPLETED` upload.
+- Streams bytes in chunk order.
+- Supports `Range` header (`206 Partial Content`).
+- Returns `Content-Disposition` using original filename.
+
+---
+
+## Data Model
+
+### `uploads`
+- `id` (UUID string PK)
+- `owner_id`
+- `file_name`, `file_size`, `chunk_size`, `total_chunks`
+- `file_checksum_sha256` (optional)
+- `status`
+- `multipart_upload_id` (optional)
+- timestamps
+
+### `chunks`
+- `id` (PK)
+- `upload_id` (FK)
+- `chunk_index` (`UNIQUE(upload_id, chunk_index)`)
+- `size_bytes`
+- `chunk_checksum_sha256` (optional)
+- `s3_key`, `s3_etag` (etag optional)
+- `status`, `retry_count`
+- timestamps
+
+### Idempotency Tables
+- `init_request_idempotency`
+- `chunk_request_idempotency`
+- `complete_request_idempotency`
+
+Each stores idempotency key + request fingerprint to reject semantic key reuse conflicts.
+
+---
+
+## Security Model
+
+### Auth Modes
+`AUTH_MODE`
+- `api_key`: `X-API-Key`
+- `jwt`: `Authorization: Bearer <token>`
+- `hybrid`: JWT preferred, API key fallback
+
+### Ownership Enforcement
+All upload-bound endpoints enforce owner match (`upload.owner_id == caller.user_id`).
+
+### Admin Authorization
+Admin endpoints (e.g., cleanup trigger) require user ID membership in `ADMIN_USER_IDS`.
+
+### Principal Rate Limiting
+`API_RATE_LIMIT_PER_MINUTE` (0 disables).
+
+---
+
+## Reliability and Backpressure
+
+### Backpressure Layers
+- Bounded worker queue depth
+- Global inflight chunk cap
+- Per-upload inflight cap
+- Per-upload fair-share cap (optional)
+
+### Retry Behavior
+Transient chunk-write failures are retried up to `MAX_RETRIES`.
+
+### Durable Queue Modes
+`QUEUE_BACKEND`
+- `memory`: in-process queueing
+- `redis`: Redis-backed queue
+- `sqs`: SQS-backed queue
+
+In Redis/SQS mode, chunk writes are enqueued durably and processed by consumers. API still waits for completion (synchronous contract retained).
+
+---
+
+## Observability
+
+### Metrics (`/metrics`)
+Key Prometheus metrics include:
+- `chunks_uploaded_total`
+- `bytes_uploaded_total`
+- `chunk_upload_failures_total`
+- `retries_total`
+- `throttled_requests_total`
+- `task_queue_depth`
+- `inflight_chunks`
+- `worker_count`
+- `worker_busy_count`
+- `s3_put_latency_seconds`
+- `db_update_latency_seconds`
+- `http_request_duration_seconds{method,route,status_code}`
+
+### Structured Logs
+- Request log stream: `dfs.request`
+- Audit log stream: `dfs.audit` (init/complete/download)
+
+### Tracing
+Optional OpenTelemetry/OTLP integration with trace ID correlation in logs and error payloads.
+
+### Alerts and Dashboards
+- Alert rules: `monitoring/alerts.yml`
+- Dashboard template: `monitoring/grafana/dashboards/dfs-overview.json`
+
+---
+
+## Background Jobs
+
+### Cleanup Loop (`app/maintenance.py`)
+When enabled:
+- Deletes stale `INITIATED`/`IN_PROGRESS` uploads older than TTL
+- Deletes aged idempotency rows
+- Best-effort deletion of orphaned storage objects
+
+Manual trigger endpoint:
+- `POST /v1/admin/cleanup`
+
+### Worker Autoscaling
+Optional dynamic worker resize loop based on queue depth and utilization thresholds.
+
+---
+
+## API Endpoints
+
+### Operational
+- `GET /health`
+- `GET /version`
+- `GET /metrics`
+- `GET /ui` (or `/console`)
+
+### Upload/Download
+- `POST /v1/uploads/init`
+- `PUT /v1/uploads/{upload_id}/chunks/{chunk_index}`
+- `POST /v1/uploads/{upload_id}/complete`
+- `GET /v1/uploads/{upload_id}/missing-chunks`
+- `GET /v1/uploads/{upload_id}/download`
+
+### Admin
+- `POST /v1/admin/cleanup`
+
+### Standard Error Shape
+```json
+{
+  "detail": "human readable message",
+  "error_code": "conflict",
+  "request_id": "uuid",
+  "upload_id": "optional",
+  "trace_id": "optional"
+}
+```
+
+---
+
+## Configuration Reference
+
+### Core Runtime
+- `APP_NAME`, `APP_VERSION`
+- `HOST`, `PORT`
+- `DATABASE_URL`
+
+### Storage
+- `STORAGE_BACKEND` (`local|s3|r2`)
+- `STORAGE_ROOT`
+- `S3_BUCKET`, `AWS_REGION`
+- `R2_BUCKET`, `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, `R2_ENDPOINT_URL`
+
+### Auth / Access
+- `AUTH_MODE`
+- `API_KEY_MAPPINGS`
+- `ADMIN_USER_IDS`
+- `API_RATE_LIMIT_PER_MINUTE`
+- `JWT_SECRET`, `JWT_ALGORITHM`, `JWT_AUDIENCE`, `JWT_ISSUER`
+
+### Upload and Backpressure
+- `CHUNK_SIZE_BYTES`
+- `MAX_RETRIES`
+- `MAX_INFLIGHT_CHUNKS_PER_UPLOAD`
+- `MAX_FAIR_INFLIGHT_CHUNKS_PER_UPLOAD`
+- `MAX_GLOBAL_INFLIGHT_CHUNKS`
+- `TASK_QUEUE_MAXSIZE`
+- `WORKER_COUNT`
+
+### Durable Queue
+- `QUEUE_BACKEND` (`memory|redis|sqs`)
+- `QUEUE_CONSUMER_COUNT`
+- `QUEUE_POLL_TIMEOUT_SECONDS`
+- `QUEUE_TASK_TIMEOUT_SECONDS`
+- `REDIS_URL`, `REDIS_QUEUE_NAME`
+- `SQS_QUEUE_URL`
+
+### Autoscaling
+- `AUTOSCALE_ENABLED`
+- `MIN_WORKERS`, `MAX_WORKERS`
+- `AUTOSCALE_COOLDOWN_SECONDS`
+- `SCALE_UP_QUEUE_THRESHOLD`
+- `SCALE_UP_UTILIZATION_THRESHOLD`
+- `SCALE_DOWN_UTILIZATION_THRESHOLD`
+
+### Cleanup
+- `CLEANUP_ENABLED`
+- `CLEANUP_INTERVAL_SECONDS`
+- `STALE_UPLOAD_TTL_SECONDS`
+- `IDEMPOTENCY_TTL_SECONDS`
+
+### Tracing
+- `TRACING_ENABLED`
+- `TRACING_SERVICE_NAME`
+- `OTLP_ENDPOINT`
+- `OTLP_INSECURE`
+
+---
+
+## Quick Start (Local)
 ```bash
 python -m venv .venv
 .venv\Scripts\activate
@@ -30,280 +404,37 @@ alembic upgrade head
 uvicorn app.main:app --reload
 ```
 
-## Docker Deployment
-Run app + PostgreSQL locally with Docker:
+Open:
+- API docs: `http://127.0.0.1:8000/docs`
+- UI: `http://127.0.0.1:8000/ui`
+- Metrics: `http://127.0.0.1:8000/metrics`
+
+---
+
+## Docker Compose
 ```bash
 docker compose up --build
 ```
+Includes:
+- app
+- PostgreSQL
+- Redis
 
-Service will be available at:
-- API: `http://127.0.0.1:8000`
-- Metrics: `http://127.0.0.1:8000/metrics`
-- Web Console: `http://127.0.0.1:8000/ui`
-- Version: `http://127.0.0.1:8000/version`
-
-Notes:
-- `docker-compose.yml` overrides `DATABASE_URL` to PostgreSQL inside the Docker network.
-- `docker-compose.yml` includes Redis so durable queue mode can be enabled with `QUEUE_BACKEND=redis`.
-- Keep secrets in `.env` (already gitignored).
-- To stop:
+Stop:
 ```bash
 docker compose down
 ```
 
-## Config
-Environment variables (defaults in `app/config.py`):
-- `DATABASE_URL`
-- `STORAGE_BACKEND` (`local`, `s3`, or `r2`)
-- `STORAGE_ROOT`
-- `S3_BUCKET` (required for `STORAGE_BACKEND=s3`)
-- `AWS_REGION`
-- `R2_BUCKET` (required for `STORAGE_BACKEND=r2`)
-- `R2_ACCOUNT_ID` (required for `STORAGE_BACKEND=r2` unless `R2_ENDPOINT_URL` is set)
-- `R2_ACCESS_KEY_ID`
-- `R2_SECRET_ACCESS_KEY`
-- `R2_ENDPOINT_URL` (optional override)
-- `API_KEY_MAPPINGS` (format: `apiKey:userId,apiKey2:userId2`)
-- `ADMIN_USER_IDS` (comma-separated user IDs allowed on admin endpoints)
-- `API_RATE_LIMIT_PER_MINUTE` (`0` disables API-key rate limiting)
-- `AUTH_MODE` (`api_key`, `jwt`, `hybrid`)
-- `JWT_SECRET`
-- `JWT_ALGORITHM` (default `HS256`)
-- `JWT_AUDIENCE` (optional)
-- `JWT_ISSUER` (optional)
-- `TRACING_ENABLED` (`true`/`false`)
-- `TRACING_SERVICE_NAME`
-- `OTLP_ENDPOINT` (default `localhost:4317`)
-- `OTLP_INSECURE` (`true`/`false`)
-- `CHUNK_SIZE_BYTES`
-- `MAX_RETRIES`
-- `MAX_INFLIGHT_CHUNKS_PER_UPLOAD`
-- `MAX_FAIR_INFLIGHT_CHUNKS_PER_UPLOAD` (`0` = auto half of worker count)
-- `MAX_GLOBAL_INFLIGHT_CHUNKS`
-- `TASK_QUEUE_MAXSIZE`
-- `WORKER_COUNT`
-- `AUTOSCALE_ENABLED` (`true`/`false`)
-- `MIN_WORKERS`
-- `MAX_WORKERS`
-- `AUTOSCALE_COOLDOWN_SECONDS`
-- `SCALE_UP_QUEUE_THRESHOLD`
-- `SCALE_UP_UTILIZATION_THRESHOLD`
-- `SCALE_DOWN_UTILIZATION_THRESHOLD`
-- `QUEUE_BACKEND` (`memory`, `redis`, `sqs`)
-- `QUEUE_CONSUMER_COUNT`
-- `QUEUE_POLL_TIMEOUT_SECONDS`
-- `QUEUE_TASK_TIMEOUT_SECONDS`
-- `REDIS_URL` (used when `QUEUE_BACKEND=redis`)
-- `REDIS_QUEUE_NAME` (used when `QUEUE_BACKEND=redis`)
-- `SQS_QUEUE_URL` (used when `QUEUE_BACKEND=sqs`)
-- `CLEANUP_ENABLED` (`true`/`false`)
-- `CLEANUP_INTERVAL_SECONDS`
-- `STALE_UPLOAD_TTL_SECONDS`
-- `IDEMPOTENCY_TTL_SECONDS`
+---
 
-## Database Migrations
-Apply latest schema:
-```bash
-alembic upgrade head
-```
+## Queue Backend Verification
 
-Rollback one revision:
-```bash
-alembic downgrade -1
-```
-
-Inside Docker app container:
-```bash
-docker compose exec app alembic upgrade head
-```
-
-## API
-All `/v1/*` endpoints require authentication.
-By default (`AUTH_MODE=api_key`): use `X-API-Key`.
-When `AUTH_MODE=jwt`: use `Authorization: Bearer <token>`.
-When `AUTH_MODE=hybrid`: JWT is preferred, API key fallback is accepted.
-
-1. `POST /v1/uploads/init`
-2. `PUT /v1/uploads/{upload_id}/chunks/{chunk_index}`
-3. `POST /v1/uploads/{upload_id}/complete`
-4. `GET /v1/uploads/{upload_id}/missing-chunks`
-5. `GET /v1/uploads/{upload_id}/download`
-6. `POST /v1/admin/cleanup` (authenticated maintenance trigger)
-
-Checksum options:
-- Send `file_checksum_sha256` in `POST /v1/uploads/init` to enforce end-to-end file checksum validation at complete time.
-- Send `X-Chunk-SHA256` in chunk uploads to validate each chunk payload before writing.
-
-Standard error payload:
-```json
-{
-  "detail": "human-readable message",
-  "error_code": "conflict",
-  "request_id": "uuid-or-request-id",
-  "upload_id": "optional-upload-id",
-  "trace_id": "optional-opentelemetry-trace-id"
-}
-```
-
-## Next Build Steps
-1. Add additional migrations for upcoming schema changes.
-2. Add S3-backed integration tests (real AWS environment).
-3. Strengthen fairness policy in worker scheduling.
-
-## Load Testing
-Run a basic upload lifecycle load test (service must already be running):
-```bash
-python scripts/load_test.py --base-url http://127.0.0.1:8000 --files 10 --file-size-bytes 5242880 --chunk-size-bytes 1048576 --profile balanced --output benchmarks/results/baseline.json
-```
-
-Profiles:
-- `fast`: lower concurrency, lower latency
-- `balanced`: default
-- `max-throughput`: more aggressive concurrency
-
-You can still override profile values with:
-- `--concurrent-files`
-- `--per-file-chunk-workers`
-- `--api-key` (default from `LOAD_TEST_API_KEY`, else `dev-key`)
-
-Use `benchmarks/BASELINE_TEMPLATE.md` to record benchmark runs consistently.
-
-## Monitoring Alerts
-Sample Prometheus alert rules are provided in:
-- `monitoring/alerts.yml`
-
-Grafana dashboard template:
-- `monitoring/grafana/dashboards/dfs-overview.json`
-- Import this JSON in Grafana and bind it to your Prometheus datasource UID (`prometheus` by default).
-
-They cover:
-- high throttling rate
-- chunk upload failure rate
-- queue depth pressure
-- worker saturation
-- elevated API p95 latency
-
-## Distributed Tracing
-OpenTelemetry tracing can be enabled with OTLP export:
-```bash
-set TRACING_ENABLED=true
-set TRACING_SERVICE_NAME=distributed-file-service
-set OTLP_ENDPOINT=localhost:4317
-set OTLP_INSECURE=true
-```
-
-When enabled:
-- FastAPI requests are instrumented.
-- Trace IDs are included in structured logs.
-- Error responses include `trace_id` for correlation.
-
-## AWS Setup Timing
-You do not need AWS for local MVP development and tests.
-Create and configure AWS when you begin:
-1. Real S3 integration runs (`STORAGE_BACKEND=s3`)
-2. End-to-end integration tests against actual S3
-3. Staging deployment
-
-## AWS Setup Checklist (When You Start)
-Minimum setup before running real S3 integration:
-1. Create AWS account and secure root user (MFA enabled).
-2. Create an IAM user/role with S3 permissions limited to one test bucket/prefix.
-3. Create an S3 bucket for this project (dev/test only).
-4. Configure local credentials (`aws configure` or env vars).
-5. Run optional integration test:
-```bash
-set RUN_AWS_INTEGRATION=1
-set AWS_TEST_S3_BUCKET=<your-bucket>
-set AWS_REGION=us-east-1
-pytest -q tests/test_s3_integration_optional.py
-```
-
-## Cloudflare R2 Setup
-If you are using R2 instead of AWS:
-1. Create an R2 bucket in Cloudflare.
-2. Create R2 API token (access key + secret).
-3. Set env vars in PowerShell:
-```bash
-set STORAGE_BACKEND=r2
-set R2_BUCKET=<your-r2-bucket>
-set R2_ACCOUNT_ID=<your-account-id>
-set R2_ACCESS_KEY_ID=<your-access-key>
-set R2_SECRET_ACCESS_KEY=<your-secret-key>
-```
-4. Run service:
-```bash
-alembic upgrade head
-uvicorn app.main:app --reload
-```
-5. Optional real R2 integration tests:
-```bash
-set RUN_R2_INTEGRATION=1
-pytest -q tests/test_r2_integration_optional.py
-pytest -q tests/test_api_r2_integration_optional.py
-```
-
-## External Durable Queue (Redis/SQS)
-Default mode is in-process queue (`QUEUE_BACKEND=memory`).
-
-Redis path:
-```bash
-set QUEUE_BACKEND=redis
-set REDIS_URL=redis://localhost:6379/0
-set REDIS_QUEUE_NAME=dfs-chunk-tasks
-set QUEUE_CONSUMER_COUNT=4
-```
-
-With docker-compose:
-```bash
-set QUEUE_BACKEND=redis
-docker compose up --build
-```
-
-SQS path:
-```bash
-set QUEUE_BACKEND=sqs
-set SQS_QUEUE_URL=https://sqs.<region>.amazonaws.com/<account>/<queue-name>
-set AWS_REGION=us-east-1
-set QUEUE_CONSUMER_COUNT=4
-```
-
-Run service in SQS mode:
-```bash
-set QUEUE_BACKEND=sqs
-set SQS_QUEUE_URL=https://sqs.<region>.amazonaws.com/<account>/<queue-name>
-set AWS_REGION=us-east-1
-uvicorn app.main:app --reload
-```
-
-Notes:
-- In `redis`/`sqs` mode, chunk write tasks are enqueued durably and processed by queue consumer loops.
-- API requests still wait for task completion (same contract as before), but queue durability improves crash recovery characteristics.
-
-Optional Redis live integration test (service must already be running with `QUEUE_BACKEND=redis`):
-```bash
-set RUN_REDIS_INTEGRATION=1
-set REDIS_INTEGRATION_BASE_URL=http://127.0.0.1:8000
-set REDIS_INTEGRATION_API_KEY=dev-key
-pytest -q tests/test_redis_queue_integration_optional.py
-```
-
-Optional SQS live integration test (service must already be running with `QUEUE_BACKEND=sqs`):
-```bash
-set RUN_SQS_INTEGRATION=1
-set SQS_INTEGRATION_BASE_URL=http://127.0.0.1:8000
-set SQS_INTEGRATION_API_KEY=dev-key
-set SQS_QUEUE_URL=https://sqs.<region>.amazonaws.com/<account>/<queue-name>
-set AWS_REGION=us-east-1
-pytest -q tests/test_sqs_queue_integration_optional.py
-```
-
-## Runtime and Queue Verification Scripts
-Route/runtime check (diagnose `/ui` 404 issues):
+### Runtime Route Check
 ```bash
 python scripts/verify_runtime_routes.py
 ```
 
-Queue backend preflight check:
+### Queue Preflight
 ```bash
 python scripts/verify_queue_mode.py
 ```
@@ -321,3 +452,72 @@ set SQS_QUEUE_URL=https://sqs.<region>.amazonaws.com/<account>/<queue-name>
 set AWS_REGION=us-east-1
 python scripts/verify_queue_mode.py
 ```
+
+---
+
+## Integration Testing Matrix
+
+### Full Test Suite
+```bash
+pytest -q
+```
+
+### Optional Live Tests (feature-flagged)
+- R2 storage integration:
+  - `tests/test_r2_integration_optional.py`
+  - `tests/test_api_r2_integration_optional.py`
+
+- Redis queue integration:
+  - `tests/test_redis_queue_integration_optional.py`
+
+- SQS queue integration:
+  - `tests/test_sqs_queue_integration_optional.py`
+
+Enable via env flags and required credentials/URLs.
+
+---
+
+## Load Testing
+```bash
+python scripts/load_test.py --base-url http://127.0.0.1:8000 --files 10 --file-size-bytes 5242880 --chunk-size-bytes 1048576 --profile balanced --output benchmarks/results/baseline.json
+```
+
+Profiles:
+- `fast`
+- `balanced`
+- `max-throughput`
+
+---
+
+## Troubleshooting
+
+### `/ui` returns 404
+Likely stale runtime process.
+
+1. Stop existing server(s)
+2. Ensure latest code (`git pull`)
+3. Restart from repo root
+4. Run:
+```bash
+python scripts/verify_runtime_routes.py
+```
+
+### Download returns `409`
+Upload is not completed yet. Run `complete` first.
+
+### File downloads as `.bin`
+Ensure current server build is running and returns `Content-Disposition` filename header.
+
+---
+
+## Production Notes
+- Use PostgreSQL in production (avoid SQLite for concurrent write-heavy workloads).
+- Prefer `QUEUE_BACKEND=redis` or `sqs` for stronger resilience characteristics.
+- Use narrow IAM policies for S3/SQS and rotate credentials.
+- Enable tracing and alerts before load tests.
+- Tune chunk size, worker count, and queue parameters from benchmark data.
+
+---
+
+## License
+Internal/project-specific. Add a formal license file if distributing publicly.
