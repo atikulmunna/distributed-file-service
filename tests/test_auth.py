@@ -24,6 +24,9 @@ def test_missing_api_key_rejected() -> None:
     with TestClient(app) as client:
         response = client.post("/v1/uploads/init", json={"file_name": "a.bin", "file_size": 4, "chunk_size": 4})
         assert response.status_code == 401
+        payload = response.json()
+        assert payload["error_code"] == "missing_api_key"
+        assert payload["request_id"]
 
 
 def test_upload_owner_enforced_between_users() -> None:

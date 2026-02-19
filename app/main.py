@@ -36,6 +36,7 @@ from app.models import (
 )
 from app.schemas import (
     CompleteUploadResponse,
+    ErrorResponse,
     InitUploadRequest,
     InitUploadResponse,
     MissingChunksResponse,
@@ -79,6 +80,28 @@ def _upload_id(request: Request) -> str | None:
 
 def _log_event(payload: dict) -> None:
     request_logger.info(json.dumps(payload, sort_keys=True, separators=(",", ":")))
+
+
+def _error_code_for_status(status_code: int) -> str:
+    mapping = {
+        400: "bad_request",
+        401: "missing_api_key",
+        403: "forbidden",
+        404: "not_found",
+        409: "conflict",
+        416: "range_not_satisfiable",
+        429: "throttled",
+        500: "internal_error",
+    }
+    return mapping.get(status_code, f"http_{status_code}")
+
+
+COMMON_ERROR_RESPONSES = {
+    401: {"model": ErrorResponse, "description": "Missing API key"},
+    403: {"model": ErrorResponse, "description": "Forbidden"},
+    429: {"model": ErrorResponse, "description": "Throttled request"},
+    500: {"model": ErrorResponse, "description": "Internal server error"},
+}
 
 
 def _get_owned_upload(db: Session, upload_id: str, user: AuthUser) -> Upload:
@@ -128,7 +151,16 @@ async def http_exception_handler(request: Request, exc: HTTPException):
             "detail": str(exc.detail),
         }
     )
-    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail}, headers=exc.headers or {})
+    return JSONResponse(
+        status_code=exc.status_code,
+        content={
+            "detail": str(exc.detail),
+            "error_code": _error_code_for_status(exc.status_code),
+            "request_id": _request_id(request),
+            "upload_id": _upload_id(request),
+        },
+        headers=exc.headers or {},
+    )
 
 
 @app.exception_handler(Exception)
@@ -145,7 +177,15 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
             "detail": str(exc),
         }
     )
-    return JSONResponse(status_code=500, content={"detail": "internal server error"})
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": "internal server error",
+            "error_code": "internal_error",
+            "request_id": _request_id(request),
+            "upload_id": _upload_id(request),
+        },
+    )
 
 
 @app.get("/health")
@@ -158,7 +198,12 @@ def metrics() -> Response:
     return metrics_response()
 
 
-@app.post("/v1/uploads/init", response_model=InitUploadResponse, status_code=201)
+@app.post(
+    "/v1/uploads/init",
+    response_model=InitUploadResponse,
+    status_code=201,
+    responses={**COMMON_ERROR_RESPONSES, 409: {"model": ErrorResponse, "description": "Idempotency conflict"}},
+)
 def init_upload(
     payload: InitUploadRequest,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
@@ -235,7 +280,17 @@ def _persist_chunk(
     return result.key, result.etag
 
 
-@app.put("/v1/uploads/{upload_id}/chunks/{chunk_index}", response_model=UploadChunkResponse, status_code=202)
+@app.put(
+    "/v1/uploads/{upload_id}/chunks/{chunk_index}",
+    response_model=UploadChunkResponse,
+    status_code=202,
+    responses={
+        **COMMON_ERROR_RESPONSES,
+        400: {"model": ErrorResponse, "description": "Validation error"},
+        404: {"model": ErrorResponse, "description": "Upload not found"},
+        409: {"model": ErrorResponse, "description": "State/idempotency conflict"},
+    },
+)
 async def upload_chunk(
     upload_id: str,
     chunk_index: int,
@@ -336,7 +391,15 @@ async def upload_chunk(
     return UploadChunkResponse(upload_id=upload_id, chunk_index=chunk_index, status=ChunkStatus.uploaded.value)
 
 
-@app.post("/v1/uploads/{upload_id}/complete", response_model=CompleteUploadResponse)
+@app.post(
+    "/v1/uploads/{upload_id}/complete",
+    response_model=CompleteUploadResponse,
+    responses={
+        **COMMON_ERROR_RESPONSES,
+        404: {"model": ErrorResponse, "description": "Upload not found"},
+        409: {"model": ErrorResponse, "description": "State/idempotency conflict"},
+    },
+)
 def complete_upload(
     upload_id: str,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
@@ -407,7 +470,11 @@ def complete_upload(
     return CompleteUploadResponse(upload_id=upload.id, status=upload.status)
 
 
-@app.get("/v1/uploads/{upload_id}/missing-chunks", response_model=MissingChunksResponse)
+@app.get(
+    "/v1/uploads/{upload_id}/missing-chunks",
+    response_model=MissingChunksResponse,
+    responses={**COMMON_ERROR_RESPONSES, 404: {"model": ErrorResponse, "description": "Upload not found"}},
+)
 def missing_chunks(
     upload_id: str,
     user: AuthUser = Depends(require_api_user),
@@ -457,7 +524,15 @@ def _stream_bytes_for_range(chunks: list[Chunk], start: int, end: int) -> Iterat
         cursor = next_cursor
 
 
-@app.get("/v1/uploads/{upload_id}/download")
+@app.get(
+    "/v1/uploads/{upload_id}/download",
+    responses={
+        **COMMON_ERROR_RESPONSES,
+        404: {"model": ErrorResponse, "description": "Upload not found"},
+        409: {"model": ErrorResponse, "description": "Upload not completed"},
+        416: {"model": ErrorResponse, "description": "Invalid range request"},
+    },
+)
 def download(
     upload_id: str,
     range: str | None = Header(default=None),

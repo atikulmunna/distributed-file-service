@@ -66,6 +66,16 @@ All `/v1/*` endpoints require `X-API-Key` header.
 4. `GET /v1/uploads/{upload_id}/missing-chunks`
 5. `GET /v1/uploads/{upload_id}/download`
 
+Standard error payload:
+```json
+{
+  "detail": "human-readable message",
+  "error_code": "conflict",
+  "request_id": "uuid-or-request-id",
+  "upload_id": "optional-upload-id"
+}
+```
+
 ## Next Build Steps
 1. Add additional migrations for upcoming schema changes.
 2. Add S3-backed integration tests (real AWS environment).

@@ -29,3 +29,10 @@ class MissingChunksResponse(BaseModel):
     upload_id: str
     missing_chunk_indexes: list[int]
     status: str
+
+
+class ErrorResponse(BaseModel):
+    detail: str
+    error_code: str
+    request_id: str | None = None
+    upload_id: str | None = None
