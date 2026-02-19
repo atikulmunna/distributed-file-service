@@ -210,6 +210,24 @@ def ui_html() -> str:
           <div><button id="completeBtn" class="alt">Complete Upload</button></div>
           <div><button id="downloadBtn" class="alt">Download File</button></div>
         </div>
+        <div class="row" style="margin-top:8px;">
+          <div>
+            <label>Chunk Upload Parallelism</label>
+            <input id="parallelism" type="number" value="3" min="1" max="16" />
+          </div>
+          <div>
+            <label>Download Range (start-end, optional)</label>
+            <input id="downloadRange" class="mono" placeholder="e.g. 0-1048575" />
+          </div>
+          <div>
+            <label>Behavior Flags</label>
+            <div class="mono" style="display:grid; gap:2px;">
+              <label style="display:flex; align-items:center; gap:6px; margin:0;"><input id="autoComplete" type="checkbox" checked style="width:auto;">auto-complete after upload</label>
+              <label style="display:flex; align-items:center; gap:6px; margin:0;"><input id="useIdempotency" type="checkbox" checked style="width:auto;">add idempotency keys</label>
+              <label style="display:flex; align-items:center; gap:6px; margin:0;"><input id="sendFileChecksum" type="checkbox" style="width:auto;">send file sha256 on init</label>
+            </div>
+          </div>
+        </div>
         <div class="progress"><div class="bar" id="bar"></div></div>
         <p id="status" class="mono"></p>
       </div>
@@ -305,6 +323,7 @@ def ui_html() -> str:
     const baseUrl = () => $("baseUrl").value.trim() || window.location.origin;
     const apiKey = () => $("apiKey").value.trim();
     const chunkSize = () => Math.max(1, Number($("chunkSize").value || "1048576"));
+    const parallelism = () => Math.max(1, Number($("parallelism").value || "1"));
     const fileInput = () => $("fileInput").files[0];
     $("baseUrl").value = window.location.origin;
 
@@ -448,9 +467,14 @@ def ui_html() -> str:
 
     async function initUpload(file) {
       const payload = { file_name: file.name, file_size: file.size, chunk_size: chunkSize() };
+      if ($("sendFileChecksum").checked) {
+        payload.file_checksum_sha256 = await sha256Hex(file);
+      }
+      const headers = { "Content-Type": "application/json" };
+      if ($("useIdempotency").checked) headers["Idempotency-Key"] = `init-${Date.now()}-${Math.random()}`;
       return await api("/v1/uploads/init", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers,
         body: JSON.stringify(payload)
       });
     }
@@ -460,35 +484,85 @@ def ui_html() -> str:
       const indexes = onlyIndexes || chunks.map((_, i) => i);
       if (state.transfer.started_at === 0) state.transfer.started_at = Date.now();
       setProgress(0, indexes.length);
-      for (const idx of indexes) {
-        const blob = chunks[idx];
-        const sha = await sha256Hex(blob);
-        state.chunkRows.set(idx, { index: idx, size: blob.size, sha256: sha, status: "uploading", duration_ms: "-" });
-        renderChunkTable();
-        const started = performance.now();
-        try {
-          await api(`/v1/uploads/${uploadId}/chunks/${idx}`, {
-            method: "PUT",
-            headers: {
+      let cursor = 0;
+      let done = 0;
+      const workers = new Array(parallelism()).fill(0).map(async (_, workerId) => {
+        while (true) {
+          const pointer = cursor;
+          cursor += 1;
+          if (pointer >= indexes.length) break;
+          const idx = indexes[pointer];
+          const blob = chunks[idx];
+          const sha = await sha256Hex(blob);
+          state.chunkRows.set(idx, { index: idx, size: blob.size, sha256: sha, status: "uploading", duration_ms: "-" });
+          renderChunkTable();
+          const started = performance.now();
+          try {
+            const headers = {
               "Content-Length": String(blob.size),
               "X-Chunk-SHA256": sha
-            },
-            body: blob
-          });
-          const elapsed = Math.round(performance.now() - started);
-          state.chunkRows.set(idx, { index: idx, size: blob.size, sha256: sha, status: "uploaded", duration_ms: elapsed });
-          state.transfer.uploaded_chunks += 1;
-          state.transfer.bytes_uploaded += blob.size;
-          setProgress(state.transfer.uploaded_chunks, state.transfer.total_chunks);
-          renderChunkTable();
-          renderTransferInfo();
-          log("uploaded chunk", { upload_id: uploadId, chunk_index: idx, duration_ms: elapsed });
-        } catch (e) {
-          state.chunkRows.set(idx, { index: idx, size: blob.size, sha256: sha, status: "failed", duration_ms: "-" });
-          renderChunkTable();
-          throw e;
+            };
+            if ($("useIdempotency").checked) headers["Idempotency-Key"] = `chunk-${uploadId}-${idx}`;
+            await api(`/v1/uploads/${uploadId}/chunks/${idx}`, {
+              method: "PUT",
+              headers,
+              body: blob
+            });
+            const elapsed = Math.round(performance.now() - started);
+            state.chunkRows.set(idx, { index: idx, size: blob.size, sha256: sha, status: "uploaded", duration_ms: elapsed });
+            state.transfer.uploaded_chunks += 1;
+            state.transfer.bytes_uploaded += blob.size;
+            done += 1;
+            setProgress(done, indexes.length);
+            renderChunkTable();
+            renderTransferInfo();
+            log("uploaded chunk", { upload_id: uploadId, chunk_index: idx, duration_ms: elapsed, worker_id: workerId });
+          } catch (e) {
+            state.chunkRows.set(idx, { index: idx, size: blob.size, sha256: sha, status: "failed", duration_ms: "-" });
+            renderChunkTable();
+            throw e;
+          }
         }
-      }
+      });
+      await Promise.all(workers);
+    }
+
+    async function completeUpload(uploadId) {
+      const headers = {};
+      if ($("useIdempotency").checked) headers["Idempotency-Key"] = `complete-${uploadId}`;
+      const result = await api(`/v1/uploads/${uploadId}/complete`, { method: "POST", headers });
+      setStatus(`Upload completed: ${uploadId}`, "ok");
+      log("complete response", result);
+    }
+
+    async function downloadUpload(uploadId) {
+      const started = performance.now();
+      const headers = { "X-API-Key": apiKey() };
+      const rangeValue = $("downloadRange").value.trim();
+      if (rangeValue) headers["Range"] = `bytes=${rangeValue}`;
+      const res = await fetch(baseUrl() + `/v1/uploads/${uploadId}/download`, { headers });
+      const duration = Math.round(performance.now() - started);
+      recordRequest({
+        time: nowIso(),
+        method: "GET",
+        path: `/v1/uploads/${uploadId}/download`,
+        status: res.status,
+        duration_ms: duration,
+        request_id: res.headers.get("X-Request-ID")
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const blob = await res.blob();
+      const contentDisposition = res.headers.get("Content-Disposition") || "";
+      let fileName = `download-${uploadId}.bin`;
+      const match = contentDisposition.match(/filename="([^"]+)"/i);
+      if (match && match[1]) fileName = match[1];
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = fileName;
+      a.click();
+      URL.revokeObjectURL(a.href);
+      log("download complete", { upload_id: uploadId, bytes: blob.size, file_name: fileName, duration_ms: duration, range: rangeValue || null });
+      setStatus(`Downloaded ${fileName} (${bytesHuman(blob.size)})`, "ok");
     }
 
     function resetTransferForFile(file) {
@@ -524,6 +598,9 @@ def ui_html() -> str:
         $("uploadId").value = init.upload_id;
         log("init complete", init);
         await uploadAll(init.upload_id, file);
+        if ($("autoComplete").checked) {
+          await completeUpload(init.upload_id);
+        }
       } catch (e) {
         setStatus(`Upload failed: ${String(e.message || e)}`, "bad");
         log("start upload failed", { error: String(e.message || e) });
@@ -554,9 +631,7 @@ def ui_html() -> str:
       try {
         const uploadId = $("uploadId").value.trim();
         if (!uploadId) throw new Error("Set upload ID");
-        const result = await api(`/v1/uploads/${uploadId}/complete`, { method: "POST" });
-        setStatus(`Upload completed: ${uploadId}`, "ok");
-        log("complete response", result);
+        await completeUpload(uploadId);
       } catch (e) {
         setStatus(`Complete failed: ${String(e.message || e)}`, "bad");
         log("complete failed", { error: String(e.message || e) });
@@ -567,32 +642,7 @@ def ui_html() -> str:
       try {
         const uploadId = $("uploadId").value.trim();
         if (!uploadId) throw new Error("Set upload ID");
-        const started = performance.now();
-        const res = await fetch(baseUrl() + `/v1/uploads/${uploadId}/download`, {
-          headers: { "X-API-Key": apiKey() }
-        });
-        const duration = Math.round(performance.now() - started);
-        recordRequest({
-          time: nowIso(),
-          method: "GET",
-          path: `/v1/uploads/${uploadId}/download`,
-          status: res.status,
-          duration_ms: duration,
-          request_id: res.headers.get("X-Request-ID")
-        });
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const blob = await res.blob();
-        const contentDisposition = res.headers.get("Content-Disposition") || "";
-        let fileName = `download-${uploadId}.bin`;
-        const match = contentDisposition.match(/filename="([^"]+)"/i);
-        if (match && match[1]) fileName = match[1];
-        const a = document.createElement("a");
-        a.href = URL.createObjectURL(blob);
-        a.download = fileName;
-        a.click();
-        URL.revokeObjectURL(a.href);
-        log("download complete", { upload_id: uploadId, bytes: blob.size, file_name: fileName, duration_ms: duration });
-        setStatus(`Downloaded ${fileName} (${bytesHuman(blob.size)})`, "ok");
+        await downloadUpload(uploadId);
       } catch (e) {
         setStatus(`Download failed: ${String(e.message || e)}`, "bad");
         log("download failed", { error: String(e.message || e) });
