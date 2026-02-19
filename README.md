@@ -71,8 +71,17 @@ alembic downgrade -1
 ## Load Testing
 Run a basic upload lifecycle load test (service must already be running):
 ```bash
-python scripts/load_test.py --base-url http://127.0.0.1:8000 --files 10 --file-size-bytes 5242880 --chunk-size-bytes 1048576 --concurrent-files 4 --per-file-chunk-workers 4 --output benchmarks/results/baseline.json
+python scripts/load_test.py --base-url http://127.0.0.1:8000 --files 10 --file-size-bytes 5242880 --chunk-size-bytes 1048576 --profile balanced --output benchmarks/results/baseline.json
 ```
+
+Profiles:
+- `fast`: lower concurrency, lower latency
+- `balanced`: default
+- `max-throughput`: more aggressive concurrency
+
+You can still override profile values with:
+- `--concurrent-files`
+- `--per-file-chunk-workers`
 
 Use `benchmarks/BASELINE_TEMPLATE.md` to record benchmark runs consistently.
 

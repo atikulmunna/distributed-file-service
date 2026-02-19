@@ -8,6 +8,12 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import httpx
 
+PROFILE_PRESETS = {
+    "fast": {"concurrent_files": 2, "per_file_chunk_workers": 2},
+    "balanced": {"concurrent_files": 3, "per_file_chunk_workers": 4},
+    "max-throughput": {"concurrent_files": 4, "per_file_chunk_workers": 6},
+}
+
 
 def _build_payload(size_bytes: int) -> bytes:
     pattern = b"dfs-load-test-"
@@ -75,13 +81,32 @@ def main() -> int:
     parser.add_argument("--file-size-bytes", type=int, default=5 * 1024 * 1024, help="Per file size in bytes")
     parser.add_argument("--chunk-size-bytes", type=int, default=1024 * 1024, help="Chunk size in bytes")
     parser.add_argument(
-        "--concurrent-files", type=int, default=3, help="How many files to upload in parallel (client-side)"
+        "--profile",
+        choices=sorted(PROFILE_PRESETS.keys()),
+        default="balanced",
+        help="Concurrency profile preset to use.",
     )
     parser.add_argument(
-        "--per-file-chunk-workers", type=int, default=4, help="Parallel chunk uploads per file (client-side)"
+        "--concurrent-files",
+        type=int,
+        default=None,
+        help="How many files to upload in parallel (client-side). Overrides profile if set.",
+    )
+    parser.add_argument(
+        "--per-file-chunk-workers",
+        type=int,
+        default=None,
+        help="Parallel chunk uploads per file (client-side). Overrides profile if set.",
     )
     parser.add_argument("--output", default="", help="Optional path to write JSON summary")
     args = parser.parse_args()
+    profile = PROFILE_PRESETS[args.profile]
+    concurrent_files = args.concurrent_files if args.concurrent_files is not None else profile["concurrent_files"]
+    per_file_chunk_workers = (
+        args.per_file_chunk_workers
+        if args.per_file_chunk_workers is not None
+        else profile["per_file_chunk_workers"]
+    )
 
     payload = _build_payload(args.file_size_bytes)
     upload_jobs = [f"load-file-{uuid.uuid4()}.bin" for _ in range(args.files)]
@@ -89,7 +114,7 @@ def main() -> int:
     run_started = time.perf_counter()
     results = []
 
-    with httpx.Client() as client, ThreadPoolExecutor(max_workers=args.concurrent_files) as pool:
+    with httpx.Client() as client, ThreadPoolExecutor(max_workers=concurrent_files) as pool:
         futures = [
             pool.submit(
                 _upload_one_file,
@@ -98,7 +123,7 @@ def main() -> int:
                 file_name,
                 payload,
                 args.chunk_size_bytes,
-                args.per_file_chunk_workers,
+                per_file_chunk_workers,
             )
             for file_name in upload_jobs
         ]
@@ -119,8 +144,9 @@ def main() -> int:
         "files": args.files,
         "file_size_bytes": args.file_size_bytes,
         "chunk_size_bytes": args.chunk_size_bytes,
-        "concurrent_files": args.concurrent_files,
-        "per_file_chunk_workers": args.per_file_chunk_workers,
+        "profile": args.profile,
+        "concurrent_files": concurrent_files,
+        "per_file_chunk_workers": per_file_chunk_workers,
         "elapsed_seconds": round(elapsed, 3),
         "total_bytes_uploaded": total_bytes,
         "total_chunks_uploaded": total_chunks,
