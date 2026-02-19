@@ -264,6 +264,7 @@ async def request_context_and_logging(request: Request, call_next):
     duration_ms = round((time.perf_counter() - start) * 1000, 2)
     duration_seconds = duration_ms / 1000.0
     response.headers["X-Request-ID"] = request_id
+    response.headers["X-DFS-App-Version"] = settings.app_version
     http_request_duration_seconds.labels(
         method=request.method,
         route=_route_label(request),
@@ -342,8 +343,19 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.get("/version")
+def version() -> dict[str, str]:
+    return {
+        "app_name": settings.app_name,
+        "app_version": settings.app_version,
+        "queue_backend": settings.queue_backend,
+        "storage_backend": settings.storage_backend,
+    }
+
+
 @app.get("/", response_class=HTMLResponse)
 @app.get("/ui", response_class=HTMLResponse)
+@app.get("/console", response_class=HTMLResponse)
 def web_console() -> HTMLResponse:
     return HTMLResponse(content=ui_html())
 

@@ -5,6 +5,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     app_name: str = "distributed-file-service"
+    app_version: str = "dev"
     host: str = "0.0.0.0"
     port: int = 8000
     database_url: str = "sqlite:///./distributed_file_service.db"

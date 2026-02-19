@@ -40,6 +40,7 @@ Service will be available at:
 - API: `http://127.0.0.1:8000`
 - Metrics: `http://127.0.0.1:8000/metrics`
 - Web Console: `http://127.0.0.1:8000/ui`
+- Version: `http://127.0.0.1:8000/version`
 
 Notes:
 - `docker-compose.yml` overrides `DATABASE_URL` to PostgreSQL inside the Docker network.
@@ -294,4 +295,29 @@ set SQS_INTEGRATION_API_KEY=dev-key
 set SQS_QUEUE_URL=https://sqs.<region>.amazonaws.com/<account>/<queue-name>
 set AWS_REGION=us-east-1
 pytest -q tests/test_sqs_queue_integration_optional.py
+```
+
+## Runtime and Queue Verification Scripts
+Route/runtime check (diagnose `/ui` 404 issues):
+```bash
+python scripts/verify_runtime_routes.py
+```
+
+Queue backend preflight check:
+```bash
+python scripts/verify_queue_mode.py
+```
+
+Examples:
+```bash
+set QUEUE_BACKEND=redis
+set REDIS_URL=redis://localhost:6379/0
+python scripts/verify_queue_mode.py
+```
+
+```bash
+set QUEUE_BACKEND=sqs
+set SQS_QUEUE_URL=https://sqs.<region>.amazonaws.com/<account>/<queue-name>
+set AWS_REGION=us-east-1
+python scripts/verify_queue_mode.py
 ```
