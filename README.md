@@ -58,6 +58,11 @@ Environment variables (defaults in `app/config.py`):
 - `API_KEY_MAPPINGS` (format: `apiKey:userId,apiKey2:userId2`)
 - `ADMIN_USER_IDS` (comma-separated user IDs allowed on admin endpoints)
 - `API_RATE_LIMIT_PER_MINUTE` (`0` disables API-key rate limiting)
+- `AUTH_MODE` (`api_key`, `jwt`, `hybrid`)
+- `JWT_SECRET`
+- `JWT_ALGORITHM` (default `HS256`)
+- `JWT_AUDIENCE` (optional)
+- `JWT_ISSUER` (optional)
 - `CHUNK_SIZE_BYTES`
 - `MAX_RETRIES`
 - `MAX_INFLIGHT_CHUNKS_PER_UPLOAD`
@@ -87,7 +92,10 @@ docker compose exec app alembic upgrade head
 ```
 
 ## API
-All `/v1/*` endpoints require `X-API-Key` header.
+All `/v1/*` endpoints require authentication.
+By default (`AUTH_MODE=api_key`): use `X-API-Key`.
+When `AUTH_MODE=jwt`: use `Authorization: Bearer <token>`.
+When `AUTH_MODE=hybrid`: JWT is preferred, API key fallback is accepted.
 
 1. `POST /v1/uploads/init`
 2. `PUT /v1/uploads/{upload_id}/chunks/{chunk_index}`

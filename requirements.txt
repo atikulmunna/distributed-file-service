@@ -9,3 +9,4 @@ boto3==1.40.7
 httpx==0.28.1
 alembic==1.16.5
 psycopg[binary]==3.2.9
+PyJWT==2.9.0
