@@ -106,6 +106,7 @@ def test_metrics_endpoint_available() -> None:
         metrics = client.get("/metrics")
         assert metrics.status_code == 200
         assert "chunks_uploaded_total" in metrics.text
+        assert "http_request_duration_seconds_bucket" in metrics.text
 
 
 def test_init_idempotency_key_reuses_upload() -> None:

@@ -14,6 +14,7 @@ This repository contains a runnable MVP backend for chunked uploads/downloads ba
 - Backpressure (`429`) on queue/global/per-upload inflight limits
 - Prometheus metrics at `/metrics`
 - Structured audit logs (`dfs.audit`) for init/complete/download actions
+- Request-latency histogram (`http_request_duration_seconds`) for p95/p99 tracking
 
 Storage defaults to local filesystem, and DB defaults to SQLite.
 You can switch to PostgreSQL via `DATABASE_URL` and use S3-compatible backends (`s3` or `r2`).
@@ -157,6 +158,7 @@ They cover:
 - chunk upload failure rate
 - queue depth pressure
 - worker saturation
+- elevated API p95 latency
 
 ## Distributed Tracing
 OpenTelemetry tracing can be enabled with OTLP export:

@@ -24,6 +24,7 @@ from app.metrics import (
     chunks_uploaded_total,
     chunk_upload_failures_total,
     db_update_latency_seconds,
+    http_request_duration_seconds,
     metrics_response,
     retries_total,
     s3_put_latency_seconds,
@@ -110,6 +111,13 @@ def _upload_id(request: Request) -> str | None:
     return request.path_params.get("upload_id")
 
 
+def _route_label(request: Request) -> str:
+    route = request.scope.get("route")
+    if route is not None and hasattr(route, "path"):
+        return str(route.path)
+    return request.url.path
+
+
 def _log_event(payload: dict) -> None:
     payload.setdefault("trace_id", _trace_id())
     request_logger.info(json.dumps(payload, sort_keys=True, separators=(",", ":")))
@@ -166,7 +174,13 @@ async def request_context_and_logging(request: Request, call_next):
 
     response = await call_next(request)
     duration_ms = round((time.perf_counter() - start) * 1000, 2)
+    duration_seconds = duration_ms / 1000.0
     response.headers["X-Request-ID"] = request_id
+    http_request_duration_seconds.labels(
+        method=request.method,
+        route=_route_label(request),
+        status_code=str(response.status_code),
+    ).observe(duration_seconds)
 
     _log_event(
         {

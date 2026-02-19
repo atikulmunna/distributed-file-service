@@ -14,6 +14,11 @@ worker_busy_count = Gauge("worker_busy_count", "Approximate busy workers")
 
 s3_put_latency_seconds = Histogram("s3_put_latency_seconds", "Chunk storage write latency in seconds")
 db_update_latency_seconds = Histogram("db_update_latency_seconds", "DB update latency in seconds")
+http_request_duration_seconds = Histogram(
+    "http_request_duration_seconds",
+    "HTTP request latency in seconds",
+    ["method", "route", "status_code"],
+)
 
 
 def metrics_response() -> Response:

@@ -36,3 +36,12 @@ groups:
         annotations:
           summary: "Worker pool saturation"
           description: "Worker utilization above 90% for 10m."
+
+      - alert: HighP95RequestLatency
+        expr: histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket[5m]))) > 1.0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "API p95 latency elevated"
+          description: "Overall HTTP p95 latency is above 1s for 10m."
