@@ -805,7 +805,11 @@ def download(
     if len(chunks) != upload.total_chunks:
         raise HTTPException(status_code=500, detail="upload metadata is inconsistent")
 
-    headers = {"Accept-Ranges": "bytes"}
+    safe_name = upload.file_name.replace('"', "")
+    headers = {
+        "Accept-Ranges": "bytes",
+        "Content-Disposition": f'attachment; filename="{safe_name}"',
+    }
     _audit_event(
         {
             "event": "audit",

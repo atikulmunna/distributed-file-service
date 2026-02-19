@@ -290,12 +290,16 @@ def ui_html() -> str:
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const blob = await res.blob();
+        const contentDisposition = res.headers.get("Content-Disposition") || "";
+        let fileName = `download-${uploadId}.bin`;
+        const match = contentDisposition.match(/filename="([^"]+)"/i);
+        if (match && match[1]) fileName = match[1];
         const a = document.createElement("a");
         a.href = URL.createObjectURL(blob);
-        a.download = `download-${uploadId}.bin`;
+        a.download = fileName;
         a.click();
         URL.revokeObjectURL(a.href);
-        log("download complete", { upload_id: uploadId, bytes: blob.size });
+        log("download complete", { upload_id: uploadId, bytes: blob.size, file_name: fileName });
       } catch (e) {
         log("download failed", { error: String(e.message || e) });
       }

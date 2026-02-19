@@ -75,6 +75,7 @@ def test_upload_resume_complete_download_flow() -> None:
         download = client.get(f"/v1/uploads/{upload_id}/download")
         assert download.status_code == 200
         assert download.content == b"abcdefghijk"
+        assert 'filename="sample.bin"' in download.headers.get("Content-Disposition", "")
 
         partial = client.get(f"/v1/uploads/{upload_id}/download", headers={"Range": "bytes=2-7"})
         assert partial.status_code == 206
