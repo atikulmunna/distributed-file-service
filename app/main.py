@@ -13,7 +13,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.auth import AuthUser, require_api_user
+from app.auth import AuthUser, require_admin_user, require_api_user
 from app.config import settings
 from app.db import get_db
 from app.limits import PerUploadInflightLimiter
@@ -226,7 +226,7 @@ def metrics() -> Response:
     responses={**COMMON_ERROR_RESPONSES},
 )
 def run_cleanup(
-    user: AuthUser = Depends(require_api_user),
+    user: AuthUser = Depends(require_admin_user),
     db: Session = Depends(get_db),
 ) -> dict:
     stats = cleanup_once(db)

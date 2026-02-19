@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from fastapi import Header, HTTPException
+from fastapi import Depends, Header, HTTPException
 
 from app.config import settings
 
@@ -9,6 +9,7 @@ from app.config import settings
 class AuthUser:
     user_id: str
     api_key: str
+    is_admin: bool = False
 
 
 def _parse_api_key_mappings() -> dict[str, str]:
@@ -39,4 +40,11 @@ def require_api_user(x_api_key: str | None = Header(default=None, alias="X-API-K
     user_id = mapping.get(x_api_key)
     if not user_id:
         raise HTTPException(status_code=403, detail="invalid API key")
-    return AuthUser(user_id=user_id, api_key=x_api_key)
+    admin_ids = {item.strip() for item in settings.admin_user_ids.split(",") if item.strip()}
+    return AuthUser(user_id=user_id, api_key=x_api_key, is_admin=user_id in admin_ids)
+
+
+def require_admin_user(user: AuthUser = Depends(require_api_user)) -> AuthUser:
+    if not user.is_admin:
+        raise HTTPException(status_code=403, detail="admin access required")
+    return user

@@ -6,6 +6,7 @@ from sqlalchemy import delete
 from app.db import Base, SessionLocal, engine
 from app.main import app
 from app.maintenance import cleanup_once
+from app.config import settings
 from app.models import Chunk, ChunkRequestIdempotency, CompleteRequestIdempotency, InitRequestIdempotency, Upload
 
 
@@ -92,3 +93,21 @@ def test_admin_cleanup_endpoint_requires_api_key() -> None:
     with TestClient(app) as client:
         resp = client.post("/v1/admin/cleanup")
         assert resp.status_code == 401
+
+
+def test_admin_cleanup_endpoint_requires_admin_role() -> None:
+    old_mapping = settings.api_key_mappings
+    old_admins = settings.admin_user_ids
+    settings.api_key_mappings = "user-key:user-a,admin-key:user-admin"
+    settings.admin_user_ids = "user-admin"
+    try:
+        with TestClient(app) as client:
+            forbidden = client.post("/v1/admin/cleanup", headers={"X-API-Key": "user-key"})
+            assert forbidden.status_code == 403
+
+            allowed = client.post("/v1/admin/cleanup", headers={"X-API-Key": "admin-key"})
+            assert allowed.status_code == 200
+            assert allowed.json()["requested_by"] == "user-admin"
+    finally:
+        settings.api_key_mappings = old_mapping
+        settings.admin_user_ids = old_admins

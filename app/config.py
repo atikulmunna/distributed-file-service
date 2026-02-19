@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     r2_secret_access_key: str = ""
     r2_endpoint_url: str = ""
     api_key_mappings: str = "dev-key:dev-user"
+    admin_user_ids: str = "dev-user"
     chunk_size_bytes: int = 5 * 1024 * 1024
     max_retries: int = 3
     max_inflight_chunks_per_upload: int = 8
