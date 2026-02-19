@@ -68,6 +68,14 @@ alembic downgrade -1
 2. Add S3-backed integration tests (real AWS environment).
 3. Strengthen fairness policy in worker scheduling.
 
+## Load Testing
+Run a basic upload lifecycle load test (service must already be running):
+```bash
+python scripts/load_test.py --base-url http://127.0.0.1:8000 --files 10 --file-size-bytes 5242880 --chunk-size-bytes 1048576 --concurrent-files 4 --per-file-chunk-workers 4 --output benchmarks/results/baseline.json
+```
+
+Use `benchmarks/BASELINE_TEMPLATE.md` to record benchmark runs consistently.
+
 ## AWS Setup Timing
 You do not need AWS for local MVP development and tests.
 Create and configure AWS when you begin:

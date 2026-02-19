@@ -8,3 +8,4 @@ migration_check.db
 migration_check_2.db
 .env
 ci_migration_check.db
+local_benchmark.db
