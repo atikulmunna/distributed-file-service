@@ -1,0 +1,464 @@
+import math
+import time
+import hashlib
+import json
+import logging
+import uuid
+from contextlib import asynccontextmanager
+from collections.abc import Iterator
+
+from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
+from fastapi.responses import JSONResponse, StreamingResponse
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
+
+from app.config import settings
+from app.db import get_db
+from app.limits import PerUploadInflightLimiter
+from app.metrics import (
+    bytes_uploaded_total,
+    chunks_uploaded_total,
+    chunk_upload_failures_total,
+    db_update_latency_seconds,
+    metrics_response,
+    retries_total,
+    s3_put_latency_seconds,
+)
+from app.models import (
+    Chunk,
+    ChunkRequestIdempotency,
+    ChunkStatus,
+    CompleteRequestIdempotency,
+    InitRequestIdempotency,
+    Upload,
+    UploadStatus,
+)
+from app.schemas import (
+    CompleteUploadResponse,
+    InitUploadRequest,
+    InitUploadResponse,
+    MissingChunksResponse,
+    UploadChunkResponse,
+)
+from app.storage import storage
+from app.worker import executor
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    yield
+
+
+app = FastAPI(title=settings.app_name, lifespan=lifespan)
+_fair_share_cap = (
+    settings.max_fair_inflight_chunks_per_upload
+    if settings.max_fair_inflight_chunks_per_upload > 0
+    else max(1, settings.worker_count // 2)
+)
+upload_limiter = PerUploadInflightLimiter(settings.max_inflight_chunks_per_upload, fair_share_limit=_fair_share_cap)
+request_logger = logging.getLogger("dfs.request")
+if not request_logger.handlers:
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    request_logger.addHandler(handler)
+request_logger.setLevel(logging.INFO)
+
+
+def _fingerprint(obj: dict) -> str:
+    return hashlib.sha256(json.dumps(obj, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+
+def _request_id(request: Request) -> str:
+    return getattr(request.state, "request_id", "unknown")
+
+
+def _upload_id(request: Request) -> str | None:
+    return request.path_params.get("upload_id")
+
+
+def _log_event(payload: dict) -> None:
+    request_logger.info(json.dumps(payload, sort_keys=True, separators=(",", ":")))
+
+
+@app.middleware("http")
+async def request_context_and_logging(request: Request, call_next):
+    request_id = request.headers.get("X-Request-ID", str(uuid.uuid4()))
+    request.state.request_id = request_id
+    start = time.perf_counter()
+
+    response = await call_next(request)
+    duration_ms = round((time.perf_counter() - start) * 1000, 2)
+    response.headers["X-Request-ID"] = request_id
+
+    _log_event(
+        {
+            "event": "request_completed",
+            "request_id": request_id,
+            "upload_id": _upload_id(request),
+            "method": request.method,
+            "path": request.url.path,
+            "status_code": response.status_code,
+            "duration_ms": duration_ms,
+        }
+    )
+    return response
+
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    _log_event(
+        {
+            "event": "request_error",
+            "request_id": _request_id(request),
+            "upload_id": _upload_id(request),
+            "method": request.method,
+            "path": request.url.path,
+            "status_code": exc.status_code,
+            "error_class": "client_error" if 400 <= exc.status_code < 500 else "server_error",
+            "detail": str(exc.detail),
+        }
+    )
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail}, headers=exc.headers or {})
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    _log_event(
+        {
+            "event": "request_error",
+            "request_id": _request_id(request),
+            "upload_id": _upload_id(request),
+            "method": request.method,
+            "path": request.url.path,
+            "status_code": 500,
+            "error_class": "unhandled_exception",
+            "detail": str(exc),
+        }
+    )
+    return JSONResponse(status_code=500, content={"detail": "internal server error"})
+
+
+@app.get("/health")
+def health() -> dict[str, str]:
+    return {"status": "ok"}
+
+
+@app.get("/metrics")
+def metrics() -> Response:
+    return metrics_response()
+
+
+@app.post("/v1/uploads/init", response_model=InitUploadResponse, status_code=201)
+def init_upload(
+    payload: InitUploadRequest,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    db: Session = Depends(get_db),
+) -> InitUploadResponse:
+    chunk_size = payload.chunk_size or settings.chunk_size_bytes
+    request_fingerprint = _fingerprint(
+        {"file_name": payload.file_name, "file_size": payload.file_size, "chunk_size": chunk_size}
+    )
+    if idempotency_key:
+        existing_request = db.get(InitRequestIdempotency, idempotency_key)
+        if existing_request:
+            if existing_request.request_fingerprint != request_fingerprint:
+                raise HTTPException(status_code=409, detail="idempotency key reused with different init payload")
+            existing_upload = db.get(Upload, existing_request.upload_id)
+            if existing_upload:
+                return InitUploadResponse(
+                    upload_id=existing_upload.id,
+                    chunk_size=existing_upload.chunk_size,
+                    total_chunks=existing_upload.total_chunks,
+                    status=existing_upload.status,
+                )
+
+    total_chunks = math.ceil(payload.file_size / chunk_size)
+    upload = Upload(
+        file_name=payload.file_name,
+        file_size=payload.file_size,
+        chunk_size=chunk_size,
+        total_chunks=total_chunks,
+        status=UploadStatus.initiated.value,
+    )
+    db.add(upload)
+    db.flush()
+    try:
+        upload.multipart_upload_id = storage.initialize_upload(upload.id)
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"failed to initialize upload storage: {exc}") from exc
+    if idempotency_key:
+        db.add(
+            InitRequestIdempotency(
+                idempotency_key=idempotency_key,
+                upload_id=upload.id,
+                request_fingerprint=request_fingerprint,
+            )
+        )
+    db.commit()
+    db.refresh(upload)
+
+    return InitUploadResponse(
+        upload_id=upload.id,
+        chunk_size=upload.chunk_size,
+        total_chunks=upload.total_chunks,
+        status=upload.status,
+    )
+
+
+def _persist_chunk(
+    upload_id: str, chunk_index: int, data: bytes, multipart_upload_id: str | None
+) -> tuple[str, str | None]:
+    start = time.perf_counter()
+    result = storage.write_chunk(upload_id, chunk_index, data, multipart_upload_id=multipart_upload_id)
+    s3_put_latency_seconds.observe(time.perf_counter() - start)
+    return result.key, result.etag
+
+
+@app.put("/v1/uploads/{upload_id}/chunks/{chunk_index}", response_model=UploadChunkResponse, status_code=202)
+async def upload_chunk(
+    upload_id: str,
+    chunk_index: int,
+    request: Request,
+    content_length: int = Header(default=0),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    db: Session = Depends(get_db),
+) -> UploadChunkResponse:
+    upload = db.get(Upload, upload_id)
+    if not upload:
+        raise HTTPException(status_code=404, detail="upload not found")
+    if upload.status not in (UploadStatus.in_progress.value, UploadStatus.initiated.value):
+        raise HTTPException(status_code=409, detail="upload is not accepting chunks")
+    if chunk_index < 0 or chunk_index >= upload.total_chunks:
+        raise HTTPException(status_code=400, detail="chunk index out of bounds")
+    body = await request.body()
+    if not body:
+        raise HTTPException(status_code=400, detail="chunk payload is empty")
+    if content_length and content_length != len(body):
+        raise HTTPException(status_code=400, detail="content-length mismatch")
+
+    chunk_fingerprint = hashlib.sha256(body).hexdigest()
+    if idempotency_key:
+        existing_request = db.scalar(
+            select(ChunkRequestIdempotency).where(
+                ChunkRequestIdempotency.upload_id == upload_id,
+                ChunkRequestIdempotency.chunk_index == chunk_index,
+                ChunkRequestIdempotency.idempotency_key == idempotency_key,
+            )
+        )
+        if existing_request:
+            if existing_request.request_fingerprint != chunk_fingerprint:
+                raise HTTPException(status_code=409, detail="idempotency key reused with different chunk payload")
+            existing_chunk = db.scalar(select(Chunk).where(Chunk.upload_id == upload_id, Chunk.chunk_index == chunk_index))
+            if existing_chunk and existing_chunk.status == ChunkStatus.uploaded.value:
+                return UploadChunkResponse(
+                    upload_id=upload_id,
+                    chunk_index=chunk_index,
+                    status=existing_chunk.status,
+                )
+
+    upload_limiter.acquire(upload_id)
+    try:
+        retries = 0
+        while True:
+            try:
+                future = executor.submit(
+                    _persist_chunk, upload_id, chunk_index, body, upload.multipart_upload_id
+                )
+                s3_key, s3_etag = future.result()
+                break
+            except HTTPException:
+                raise
+            except Exception as exc:
+                retries += 1
+                retries_total.inc()
+                if retries > settings.max_retries:
+                    chunk_upload_failures_total.inc()
+                    raise HTTPException(status_code=500, detail=f"chunk upload failed: {exc}") from exc
+
+        db_t0 = time.perf_counter()
+        existing = db.scalar(select(Chunk).where(Chunk.upload_id == upload_id, Chunk.chunk_index == chunk_index))
+        if existing:
+            existing.size_bytes = len(body)
+            existing.s3_key = s3_key
+            existing.s3_etag = s3_etag
+            existing.status = ChunkStatus.uploaded.value
+            existing.retry_count = retries
+        else:
+            db.add(
+                Chunk(
+                    upload_id=upload_id,
+                    chunk_index=chunk_index,
+                    size_bytes=len(body),
+                    s3_key=s3_key,
+                    s3_etag=s3_etag,
+                    status=ChunkStatus.uploaded.value,
+                    retry_count=retries,
+                )
+            )
+        if upload.status == UploadStatus.initiated.value:
+            upload.status = UploadStatus.in_progress.value
+        if idempotency_key:
+            db.add(
+                ChunkRequestIdempotency(
+                    upload_id=upload_id,
+                    chunk_index=chunk_index,
+                    idempotency_key=idempotency_key,
+                    request_fingerprint=chunk_fingerprint,
+                )
+            )
+        db.commit()
+        db_update_latency_seconds.observe(time.perf_counter() - db_t0)
+        chunks_uploaded_total.inc()
+        bytes_uploaded_total.inc(len(body))
+    finally:
+        upload_limiter.release(upload_id)
+
+    return UploadChunkResponse(upload_id=upload_id, chunk_index=chunk_index, status=ChunkStatus.uploaded.value)
+
+
+@app.post("/v1/uploads/{upload_id}/complete", response_model=CompleteUploadResponse)
+def complete_upload(
+    upload_id: str,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    db: Session = Depends(get_db),
+) -> CompleteUploadResponse:
+    request_fingerprint = _fingerprint({"upload_id": upload_id})
+    upload = db.get(Upload, upload_id)
+    if not upload:
+        raise HTTPException(status_code=404, detail="upload not found")
+
+    if idempotency_key:
+        existing_request = db.get(CompleteRequestIdempotency, idempotency_key)
+        if existing_request:
+            if existing_request.request_fingerprint != request_fingerprint:
+                raise HTTPException(status_code=409, detail="idempotency key reused with different complete payload")
+            if existing_request.upload_id == upload_id:
+                existing_upload = db.get(Upload, upload_id)
+                if existing_upload:
+                    return CompleteUploadResponse(upload_id=existing_upload.id, status=existing_upload.status)
+
+    if upload.status == UploadStatus.initiated.value:
+        raise HTTPException(status_code=409, detail="cannot complete upload from INITIATED state")
+    if upload.status == UploadStatus.completed.value:
+        if idempotency_key:
+            existing_request = db.get(CompleteRequestIdempotency, idempotency_key)
+            if not existing_request:
+                db.add(
+                    CompleteRequestIdempotency(
+                        idempotency_key=idempotency_key,
+                        upload_id=upload_id,
+                        request_fingerprint=request_fingerprint,
+                    )
+                )
+                db.commit()
+        return CompleteUploadResponse(upload_id=upload.id, status=upload.status)
+    if upload.status != UploadStatus.in_progress.value:
+        raise HTTPException(status_code=409, detail="cannot complete upload from current state")
+
+    uploaded_count = db.scalar(
+        select(func.count(Chunk.id)).where(Chunk.upload_id == upload_id, Chunk.status == ChunkStatus.uploaded.value)
+    )
+    if uploaded_count != upload.total_chunks:
+        raise HTTPException(status_code=409, detail="cannot complete upload, missing chunks")
+
+    uploaded_chunks = list(db.scalars(select(Chunk).where(Chunk.upload_id == upload_id).order_by(Chunk.chunk_index)).all())
+    if settings.storage_backend.lower() == "s3":
+        parts: list[dict] = []
+        for chunk in uploaded_chunks:
+            if not chunk.s3_etag:
+                raise HTTPException(status_code=409, detail="cannot complete upload, missing S3 part etag")
+            parts.append({"PartNumber": chunk.chunk_index + 1, "ETag": chunk.s3_etag})
+        try:
+            storage.complete_upload(upload_id=upload_id, multipart_upload_id=upload.multipart_upload_id, parts=parts)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=f"failed to complete multipart upload: {exc}") from exc
+
+    upload.status = UploadStatus.completed.value
+    if idempotency_key:
+        db.add(
+            CompleteRequestIdempotency(
+                idempotency_key=idempotency_key,
+                upload_id=upload_id,
+                request_fingerprint=request_fingerprint,
+            )
+        )
+    db.commit()
+    return CompleteUploadResponse(upload_id=upload.id, status=upload.status)
+
+
+@app.get("/v1/uploads/{upload_id}/missing-chunks", response_model=MissingChunksResponse)
+def missing_chunks(upload_id: str, db: Session = Depends(get_db)) -> MissingChunksResponse:
+    upload = db.get(Upload, upload_id)
+    if not upload:
+        raise HTTPException(status_code=404, detail="upload not found")
+
+    uploaded_indexes = set(
+        db.scalars(
+            select(Chunk.chunk_index).where(Chunk.upload_id == upload_id, Chunk.status == ChunkStatus.uploaded.value)
+        ).all()
+    )
+    missing = [idx for idx in range(upload.total_chunks) if idx not in uploaded_indexes]
+    return MissingChunksResponse(upload_id=upload_id, missing_chunk_indexes=missing, status=upload.status)
+
+
+def _parse_range(range_header: str, file_size: int) -> tuple[int, int]:
+    if not range_header.startswith("bytes="):
+        raise HTTPException(status_code=416, detail="invalid range header")
+    parts = range_header.removeprefix("bytes=").split("-", 1)
+    if len(parts) != 2:
+        raise HTTPException(status_code=416, detail="invalid range format")
+
+    start = int(parts[0]) if parts[0] else 0
+    end = int(parts[1]) if parts[1] else file_size - 1
+    if start < 0 or end < start or end >= file_size:
+        raise HTTPException(status_code=416, detail="range out of bounds")
+    return start, end
+
+
+def _stream_bytes_for_range(chunks: list[Chunk], start: int, end: int) -> Iterator[bytes]:
+    cursor = 0
+    for chunk in chunks:
+        data = storage.read_chunk(chunk.s3_key)
+        next_cursor = cursor + len(data)
+
+        if next_cursor <= start:
+            cursor = next_cursor
+            continue
+        if cursor > end:
+            break
+
+        read_start = max(0, start - cursor)
+        read_end = min(len(data) - 1, end - cursor)
+        if read_start <= read_end:
+            yield data[read_start : read_end + 1]
+        cursor = next_cursor
+
+
+@app.get("/v1/uploads/{upload_id}/download")
+def download(upload_id: str, range: str | None = Header(default=None), db: Session = Depends(get_db)) -> Response:
+    upload = db.get(Upload, upload_id)
+    if not upload:
+        raise HTTPException(status_code=404, detail="upload not found")
+    if upload.status != UploadStatus.completed.value:
+        raise HTTPException(status_code=409, detail="upload is not completed")
+
+    chunks = list(db.scalars(select(Chunk).where(Chunk.upload_id == upload_id).order_by(Chunk.chunk_index)).all())
+    if len(chunks) != upload.total_chunks:
+        raise HTTPException(status_code=500, detail="upload metadata is inconsistent")
+
+    headers = {"Accept-Ranges": "bytes"}
+    if range:
+        start, end = _parse_range(range, upload.file_size)
+        headers["Content-Range"] = f"bytes {start}-{end}/{upload.file_size}"
+        return StreamingResponse(
+            _stream_bytes_for_range(chunks, start, end),
+            status_code=206,
+            media_type="application/octet-stream",
+            headers=headers,
+        )
+
+    return StreamingResponse(
+        _stream_bytes_for_range(chunks, 0, upload.file_size - 1),
+        media_type="application/octet-stream",
+        headers=headers,
+    )

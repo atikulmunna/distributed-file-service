@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+data/
+distributed_file_service.db
+migration_check.db
+migration_check_2.db
+.env
