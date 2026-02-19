@@ -25,6 +25,10 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_audience: str = ""
     jwt_issuer: str = ""
+    tracing_enabled: bool = False
+    tracing_service_name: str = "distributed-file-service"
+    otlp_endpoint: str = "localhost:4317"
+    otlp_insecure: bool = True
     chunk_size_bytes: int = 5 * 1024 * 1024
     max_retries: int = 3
     max_inflight_chunks_per_upload: int = 8

@@ -29,6 +29,7 @@ def test_request_completed_log_contains_request_id(caplog) -> None:
     assert completed
     assert completed[-1]["request_id"] == "req-123"
     assert completed[-1]["status_code"] == 200
+    assert "trace_id" in completed[-1]
 
 
 def test_request_error_log_contains_upload_and_error_class(caplog) -> None:
@@ -42,3 +43,4 @@ def test_request_error_log_contains_upload_and_error_class(caplog) -> None:
     assert errors
     assert errors[-1]["upload_id"] == "not-found"
     assert errors[-1]["error_class"] == "client_error"
+    assert "trace_id" in errors[-1]

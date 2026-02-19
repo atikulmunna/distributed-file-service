@@ -36,3 +36,4 @@ class ErrorResponse(BaseModel):
     error_code: str
     request_id: str | None = None
     upload_id: str | None = None
+    trace_id: str | None = None

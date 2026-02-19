@@ -12,6 +12,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
+from opentelemetry import trace
 
 from app.auth import AuthUser, require_admin_user, require_api_user
 from app.config import settings
@@ -46,6 +47,7 @@ from app.schemas import (
 )
 from app.db import SessionLocal
 from app.storage import storage
+from app.tracing import setup_tracing
 from app.worker import executor
 
 @asynccontextmanager
@@ -74,6 +76,7 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
+setup_tracing(app)
 _fair_share_cap = (
     settings.max_fair_inflight_chunks_per_upload
     if settings.max_fair_inflight_chunks_per_upload > 0
@@ -102,7 +105,15 @@ def _upload_id(request: Request) -> str | None:
 
 
 def _log_event(payload: dict) -> None:
+    payload.setdefault("trace_id", _trace_id())
     request_logger.info(json.dumps(payload, sort_keys=True, separators=(",", ":")))
+
+
+def _trace_id() -> str | None:
+    span_context = trace.get_current_span().get_span_context()
+    if not span_context or not span_context.is_valid:
+        return None
+    return format(span_context.trace_id, "032x")
 
 
 def _error_code_for_status(status_code: int) -> str:
@@ -181,6 +192,7 @@ async def http_exception_handler(request: Request, exc: HTTPException):
             "error_code": _error_code_for_status(exc.status_code),
             "request_id": _request_id(request),
             "upload_id": _upload_id(request),
+            "trace_id": _trace_id(),
         },
         headers=exc.headers or {},
     )
@@ -207,6 +219,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
             "error_code": "internal_error",
             "request_id": _request_id(request),
             "upload_id": _upload_id(request),
+            "trace_id": _trace_id(),
         },
     )
 

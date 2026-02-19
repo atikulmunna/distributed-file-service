@@ -27,6 +27,7 @@ def test_missing_api_key_rejected() -> None:
         payload = response.json()
         assert payload["error_code"] == "missing_api_key"
         assert payload["request_id"]
+        assert "trace_id" in payload
 
 
 def test_upload_owner_enforced_between_users() -> None:

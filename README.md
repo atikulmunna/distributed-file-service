@@ -63,6 +63,10 @@ Environment variables (defaults in `app/config.py`):
 - `JWT_ALGORITHM` (default `HS256`)
 - `JWT_AUDIENCE` (optional)
 - `JWT_ISSUER` (optional)
+- `TRACING_ENABLED` (`true`/`false`)
+- `TRACING_SERVICE_NAME`
+- `OTLP_ENDPOINT` (default `localhost:4317`)
+- `OTLP_INSECURE` (`true`/`false`)
 - `CHUNK_SIZE_BYTES`
 - `MAX_RETRIES`
 - `MAX_INFLIGHT_CHUNKS_PER_UPLOAD`
@@ -110,7 +114,8 @@ Standard error payload:
   "detail": "human-readable message",
   "error_code": "conflict",
   "request_id": "uuid-or-request-id",
-  "upload_id": "optional-upload-id"
+  "upload_id": "optional-upload-id",
+  "trace_id": "optional-opentelemetry-trace-id"
 }
 ```
 
@@ -146,6 +151,20 @@ They cover:
 - chunk upload failure rate
 - queue depth pressure
 - worker saturation
+
+## Distributed Tracing
+OpenTelemetry tracing can be enabled with OTLP export:
+```bash
+set TRACING_ENABLED=true
+set TRACING_SERVICE_NAME=distributed-file-service
+set OTLP_ENDPOINT=localhost:4317
+set OTLP_INSECURE=true
+```
+
+When enabled:
+- FastAPI requests are instrumented.
+- Trace IDs are included in structured logs.
+- Error responses include `trace_id` for correlation.
 
 ## AWS Setup Timing
 You do not need AWS for local MVP development and tests.
