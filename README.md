@@ -266,6 +266,14 @@ set AWS_REGION=us-east-1
 set QUEUE_CONSUMER_COUNT=4
 ```
 
+Run service in SQS mode:
+```bash
+set QUEUE_BACKEND=sqs
+set SQS_QUEUE_URL=https://sqs.<region>.amazonaws.com/<account>/<queue-name>
+set AWS_REGION=us-east-1
+uvicorn app.main:app --reload
+```
+
 Notes:
 - In `redis`/`sqs` mode, chunk write tasks are enqueued durably and processed by queue consumer loops.
 - API requests still wait for task completion (same contract as before), but queue durability improves crash recovery characteristics.
@@ -276,4 +284,14 @@ set RUN_REDIS_INTEGRATION=1
 set REDIS_INTEGRATION_BASE_URL=http://127.0.0.1:8000
 set REDIS_INTEGRATION_API_KEY=dev-key
 pytest -q tests/test_redis_queue_integration_optional.py
+```
+
+Optional SQS live integration test (service must already be running with `QUEUE_BACKEND=sqs`):
+```bash
+set RUN_SQS_INTEGRATION=1
+set SQS_INTEGRATION_BASE_URL=http://127.0.0.1:8000
+set SQS_INTEGRATION_API_KEY=dev-key
+set SQS_QUEUE_URL=https://sqs.<region>.amazonaws.com/<account>/<queue-name>
+set AWS_REGION=us-east-1
+pytest -q tests/test_sqs_queue_integration_optional.py
 ```
