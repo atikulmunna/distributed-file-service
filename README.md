@@ -43,6 +43,7 @@ Service will be available at:
 
 Notes:
 - `docker-compose.yml` overrides `DATABASE_URL` to PostgreSQL inside the Docker network.
+- `docker-compose.yml` includes Redis so durable queue mode can be enabled with `QUEUE_BACKEND=redis`.
 - Keep secrets in `.env` (already gitignored).
 - To stop:
 ```bash
@@ -251,6 +252,12 @@ set REDIS_QUEUE_NAME=dfs-chunk-tasks
 set QUEUE_CONSUMER_COUNT=4
 ```
 
+With docker-compose:
+```bash
+set QUEUE_BACKEND=redis
+docker compose up --build
+```
+
 SQS path:
 ```bash
 set QUEUE_BACKEND=sqs
@@ -262,3 +269,11 @@ set QUEUE_CONSUMER_COUNT=4
 Notes:
 - In `redis`/`sqs` mode, chunk write tasks are enqueued durably and processed by queue consumer loops.
 - API requests still wait for task completion (same contract as before), but queue durability improves crash recovery characteristics.
+
+Optional Redis live integration test (service must already be running with `QUEUE_BACKEND=redis`):
+```bash
+set RUN_REDIS_INTEGRATION=1
+set REDIS_INTEGRATION_BASE_URL=http://127.0.0.1:8000
+set REDIS_INTEGRATION_API_KEY=dev-key
+pytest -q tests/test_redis_queue_integration_optional.py
+```
