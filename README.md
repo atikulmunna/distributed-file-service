@@ -57,6 +57,7 @@ Environment variables (defaults in `app/config.py`):
 - `R2_ENDPOINT_URL` (optional override)
 - `API_KEY_MAPPINGS` (format: `apiKey:userId,apiKey2:userId2`)
 - `ADMIN_USER_IDS` (comma-separated user IDs allowed on admin endpoints)
+- `API_RATE_LIMIT_PER_MINUTE` (`0` disables API-key rate limiting)
 - `CHUNK_SIZE_BYTES`
 - `MAX_RETRIES`
 - `MAX_INFLIGHT_CHUNKS_PER_UPLOAD`
