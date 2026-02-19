@@ -1,0 +1,15 @@
+.git
+.github
+__pycache__
+*.pyc
+.pytest_cache
+.venv
+venv
+.env
+data
+benchmarks/results
+distributed_file_service.db
+local_benchmark.db
+migration_check.db
+migration_check_2.db
+auth_migration_check.db

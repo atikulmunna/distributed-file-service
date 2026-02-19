@@ -1,0 +1,38 @@
+groups:
+  - name: dfs-service-alerts
+    rules:
+      - alert: HighThrottleRate
+        expr: rate(throttled_requests_total[5m]) > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High request throttling rate"
+          description: "throttled_requests_total is sustained above 1/sec for 10m."
+
+      - alert: HighChunkUploadFailureRate
+        expr: rate(chunk_upload_failures_total[5m]) > 0.2
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Chunk upload failures elevated"
+          description: "chunk_upload_failures_total is sustained above 0.2/sec for 10m."
+
+      - alert: QueueDepthHigh
+        expr: task_queue_depth > 100
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Task queue depth high"
+          description: "task_queue_depth above 100 for 10m."
+
+      - alert: WorkerSaturation
+        expr: worker_busy_count / clamp_min(worker_count, 1) > 0.9
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Worker pool saturation"
+          description: "Worker utilization above 90% for 10m."

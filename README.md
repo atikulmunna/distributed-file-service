@@ -25,6 +25,24 @@ alembic upgrade head
 uvicorn app.main:app --reload
 ```
 
+## Docker Deployment
+Run app + PostgreSQL locally with Docker:
+```bash
+docker compose up --build
+```
+
+Service will be available at:
+- API: `http://127.0.0.1:8000`
+- Metrics: `http://127.0.0.1:8000/metrics`
+
+Notes:
+- `docker-compose.yml` overrides `DATABASE_URL` to PostgreSQL inside the Docker network.
+- Keep secrets in `.env` (already gitignored).
+- To stop:
+```bash
+docker compose down
+```
+
 ## Config
 Environment variables (defaults in `app/config.py`):
 - `DATABASE_URL`
@@ -59,6 +77,11 @@ alembic upgrade head
 Rollback one revision:
 ```bash
 alembic downgrade -1
+```
+
+Inside Docker app container:
+```bash
+docker compose exec app alembic upgrade head
 ```
 
 ## API
@@ -103,6 +126,16 @@ You can still override profile values with:
 - `--api-key` (default from `LOAD_TEST_API_KEY`, else `dev-key`)
 
 Use `benchmarks/BASELINE_TEMPLATE.md` to record benchmark runs consistently.
+
+## Monitoring Alerts
+Sample Prometheus alert rules are provided in:
+- `monitoring/alerts.yml`
+
+They cover:
+- high throttling rate
+- chunk upload failure rate
+- queue depth pressure
+- worker saturation
 
 ## AWS Setup Timing
 You do not need AWS for local MVP development and tests.
