@@ -70,7 +70,7 @@ flowchart LR
     classDef ops fill:#EDE9FE,stroke:#6D28D9,color:#4C1D95,stroke-width:1px;
 ```
 
-### Detailed Upload Flow (Chunk Split to Persist)
+### Upload Flow (Chunk Split to Persist)
 ```mermaid
 sequenceDiagram
     autonumber
@@ -114,7 +114,7 @@ sequenceDiagram
     A-->>U: 200 COMPLETED
 ```
 
-### Detailed Download Flow (Chunk Reassembly to Stream)
+### Download Flow (Chunk Reassembly to Stream)
 ```mermaid
 sequenceDiagram
     autonumber
