@@ -5,6 +5,7 @@ class InitUploadRequest(BaseModel):
     file_name: str = Field(min_length=1)
     file_size: int = Field(gt=0)
     chunk_size: int | None = Field(default=None, gt=0)
+    file_checksum_sha256: str | None = Field(default=None, pattern=r"^[0-9a-fA-F]{64}$")
 
 
 class InitUploadResponse(BaseModel):

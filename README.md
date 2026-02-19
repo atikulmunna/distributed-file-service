@@ -8,6 +8,7 @@ This repository contains a runnable MVP backend for chunked uploads/downloads ba
 - Retry loop for transient chunk write failures
 - Resume support (`missing-chunks`)
 - Upload completion validation
+- Optional checksum validation (chunk + full file)
 - Optional S3 multipart upload flow (`STORAGE_BACKEND=s3`)
 - Download streaming with basic HTTP Range support
 - Backpressure (`429`) on queue/global/per-upload inflight limits
@@ -107,6 +108,10 @@ When `AUTH_MODE=hybrid`: JWT is preferred, API key fallback is accepted.
 4. `GET /v1/uploads/{upload_id}/missing-chunks`
 5. `GET /v1/uploads/{upload_id}/download`
 6. `POST /v1/admin/cleanup` (authenticated maintenance trigger)
+
+Checksum options:
+- Send `file_checksum_sha256` in `POST /v1/uploads/init` to enforce end-to-end file checksum validation at complete time.
+- Send `X-Chunk-SHA256` in chunk uploads to validate each chunk payload before writing.
 
 Standard error payload:
 ```json

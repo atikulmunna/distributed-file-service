@@ -260,7 +260,12 @@ def init_upload(
 ) -> InitUploadResponse:
     chunk_size = payload.chunk_size or settings.chunk_size_bytes
     request_fingerprint = _fingerprint(
-        {"file_name": payload.file_name, "file_size": payload.file_size, "chunk_size": chunk_size}
+        {
+            "file_name": payload.file_name,
+            "file_size": payload.file_size,
+            "chunk_size": chunk_size,
+            "file_checksum_sha256": payload.file_checksum_sha256.lower() if payload.file_checksum_sha256 else None,
+        }
     )
     if idempotency_key:
         existing_request = db.get(InitRequestIdempotency, idempotency_key)
@@ -285,6 +290,7 @@ def init_upload(
         file_size=payload.file_size,
         chunk_size=chunk_size,
         total_chunks=total_chunks,
+        file_checksum_sha256=payload.file_checksum_sha256.lower() if payload.file_checksum_sha256 else None,
         status=UploadStatus.initiated.value,
     )
     db.add(upload)
@@ -344,6 +350,7 @@ async def upload_chunk(
     chunk_index: int,
     request: Request,
     content_length: int = Header(default=0),
+    chunk_sha256: str | None = Header(default=None, alias="X-Chunk-SHA256"),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     user: AuthUser = Depends(require_api_user),
     db: Session = Depends(get_db),
@@ -360,6 +367,8 @@ async def upload_chunk(
         raise HTTPException(status_code=400, detail="content-length mismatch")
 
     chunk_fingerprint = hashlib.sha256(body).hexdigest()
+    if chunk_sha256 and chunk_sha256.lower() != chunk_fingerprint:
+        raise HTTPException(status_code=400, detail="chunk checksum mismatch")
     if idempotency_key:
         existing_request = db.scalar(
             select(ChunkRequestIdempotency).where(
@@ -402,6 +411,7 @@ async def upload_chunk(
         existing = db.scalar(select(Chunk).where(Chunk.upload_id == upload_id, Chunk.chunk_index == chunk_index))
         if existing:
             existing.size_bytes = len(body)
+            existing.chunk_checksum_sha256 = chunk_fingerprint
             existing.s3_key = s3_key
             existing.s3_etag = s3_etag
             existing.status = ChunkStatus.uploaded.value
@@ -412,6 +422,7 @@ async def upload_chunk(
                     upload_id=upload_id,
                     chunk_index=chunk_index,
                     size_bytes=len(body),
+                    chunk_checksum_sha256=chunk_fingerprint,
                     s3_key=s3_key,
                     s3_etag=s3_etag,
                     status=ChunkStatus.uploaded.value,
@@ -494,6 +505,12 @@ def complete_upload(
         raise HTTPException(status_code=409, detail="cannot complete upload, missing chunks")
 
     uploaded_chunks = list(db.scalars(select(Chunk).where(Chunk.upload_id == upload_id).order_by(Chunk.chunk_index)).all())
+    if upload.file_checksum_sha256:
+        full_file_hash = hashlib.sha256()
+        for chunk in uploaded_chunks:
+            full_file_hash.update(storage.read_chunk(chunk.s3_key))
+        if full_file_hash.hexdigest() != upload.file_checksum_sha256:
+            raise HTTPException(status_code=409, detail="file checksum mismatch")
     if settings.storage_backend.lower() in ("s3", "r2") and upload.multipart_upload_id:
         parts: list[dict] = []
         for chunk in uploaded_chunks:

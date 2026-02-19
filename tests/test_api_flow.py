@@ -1,4 +1,5 @@
 import shutil
+import hashlib
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -38,6 +39,15 @@ def _init_upload(client: TestClient, file_size: int, chunk_size: int, headers: d
     payload = response.json()
     assert payload["total_chunks"] >= 1
     return payload["upload_id"]
+
+
+def _init_upload_with_payload(client: TestClient, payload: dict, headers: dict | None = None) -> str:
+    merged_headers = dict(AUTH_HEADERS)
+    if headers:
+        merged_headers.update(headers)
+    response = client.post("/v1/uploads/init", json=payload, headers=merged_headers)
+    assert response.status_code == 201, response.text
+    return response.json()["upload_id"]
 
 
 def test_upload_resume_complete_download_flow() -> None:
@@ -305,3 +315,81 @@ def test_complete_idempotency_conflict_for_different_uploads() -> None:
         second = client.post(f"/v1/uploads/{upload_b}/complete", headers=headers)
         assert first.status_code == 200
         assert second.status_code == 409
+
+
+def test_chunk_checksum_header_rejects_mismatch() -> None:
+    _reset_state()
+    with TestClient(app) as client:
+        client.headers.update(AUTH_HEADERS)
+        upload_id = _init_upload(client, file_size=4, chunk_size=4)
+        response = client.put(
+            f"/v1/uploads/{upload_id}/chunks/0",
+            content=b"abcd",
+            headers={"Content-Length": "4", "X-Chunk-SHA256": "0" * 64},
+        )
+        assert response.status_code == 400
+        assert "checksum mismatch" in response.text
+
+
+def test_file_checksum_validated_on_complete_success() -> None:
+    _reset_state()
+    payload = b"abcdefgh"
+    checksum = hashlib.sha256(payload).hexdigest()
+    with TestClient(app) as client:
+        client.headers.update(AUTH_HEADERS)
+        upload_id = _init_upload_with_payload(
+            client,
+            {
+                "file_name": "checksum.bin",
+                "file_size": len(payload),
+                "chunk_size": 4,
+                "file_checksum_sha256": checksum,
+            },
+        )
+        first = client.put(
+            f"/v1/uploads/{upload_id}/chunks/0",
+            content=payload[:4],
+            headers={"Content-Length": "4"},
+        )
+        second = client.put(
+            f"/v1/uploads/{upload_id}/chunks/1",
+            content=payload[4:],
+            headers={"Content-Length": "4"},
+        )
+        assert first.status_code == 202
+        assert second.status_code == 202
+
+        complete = client.post(f"/v1/uploads/{upload_id}/complete")
+        assert complete.status_code == 200
+        assert complete.json()["status"] == "COMPLETED"
+
+
+def test_file_checksum_validated_on_complete_mismatch() -> None:
+    _reset_state()
+    with TestClient(app) as client:
+        client.headers.update(AUTH_HEADERS)
+        upload_id = _init_upload_with_payload(
+            client,
+            {
+                "file_name": "checksum-mismatch.bin",
+                "file_size": 8,
+                "chunk_size": 4,
+                "file_checksum_sha256": "0" * 64,
+            },
+        )
+        first = client.put(
+            f"/v1/uploads/{upload_id}/chunks/0",
+            content=b"abcd",
+            headers={"Content-Length": "4"},
+        )
+        second = client.put(
+            f"/v1/uploads/{upload_id}/chunks/1",
+            content=b"efgh",
+            headers={"Content-Length": "4"},
+        )
+        assert first.status_code == 202
+        assert second.status_code == 202
+
+        complete = client.post(f"/v1/uploads/{upload_id}/complete")
+        assert complete.status_code == 409
+        assert "checksum mismatch" in complete.text

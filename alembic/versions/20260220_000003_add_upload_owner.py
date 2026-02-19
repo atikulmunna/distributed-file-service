@@ -19,8 +19,16 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    op.add_column("uploads", sa.Column("owner_id", sa.String(length=128), nullable=False, server_default="legacy"))
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    column_names = {column["name"] for column in inspector.get_columns("uploads")}
+    if "owner_id" not in column_names:
+        op.add_column("uploads", sa.Column("owner_id", sa.String(length=128), nullable=False, server_default="legacy"))
 
 
 def downgrade() -> None:
-    op.drop_column("uploads", "owner_id")
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    column_names = {column["name"] for column in inspector.get_columns("uploads")}
+    if "owner_id" in column_names:
+        op.drop_column("uploads", "owner_id")
