@@ -14,3 +14,4 @@ opentelemetry-api==1.28.2
 opentelemetry-sdk==1.28.2
 opentelemetry-exporter-otlp-proto-grpc==1.28.2
 opentelemetry-instrumentation-fastapi==0.49b2
+redis==5.2.1

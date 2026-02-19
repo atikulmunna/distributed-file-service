@@ -17,6 +17,7 @@ from opentelemetry import trace
 from app.auth import AuthUser, require_admin_user, require_api_user
 from app.config import settings
 from app.db import get_db
+from app.durable_queue import ChunkResultStore, ChunkWriteTask, build_durable_queue
 from app.limits import PerUploadInflightLimiter
 from app.maintenance import cleanup_once
 from app.metrics import (
@@ -51,6 +52,14 @@ from app.storage import storage
 from app.tracing import setup_tracing
 from app.ui import ui_html
 from app.worker import executor
+
+durable_queue = build_durable_queue()
+chunk_result_store = ChunkResultStore()
+
+
+def _use_external_durable_queue() -> bool:
+    return settings.queue_backend.lower() in ("redis", "sqs")
+
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
@@ -103,11 +112,52 @@ async def lifespan(_: FastAPI):
             except asyncio.TimeoutError:
                 pass
 
+    def _process_queue_message(message) -> None:
+        try:
+            key, etag = _persist_chunk(
+                upload_id=message.task.upload_id,
+                chunk_index=message.task.chunk_index,
+                data=message.task.data(),
+                multipart_upload_id=message.task.multipart_upload_id,
+            )
+            chunk_result_store.set_success(message.task.task_id, key=key, etag=etag)
+            durable_queue.ack(message.receipt)
+        except Exception as exc:
+            chunk_result_store.set_error(message.task.task_id, error=str(exc))
+            try:
+                durable_queue.ack(message.receipt)
+            except Exception:
+                pass
+
+    async def _durable_queue_consumer_loop(consumer_id: int) -> None:
+        while not stop_event.is_set():
+            try:
+                message = await asyncio.to_thread(durable_queue.dequeue, settings.queue_poll_timeout_seconds)
+                if message is None:
+                    continue
+                await asyncio.to_thread(_process_queue_message, message)
+            except Exception as exc:
+                _log_event(
+                    {
+                        "event": "queue_consumer_error",
+                        "consumer_id": consumer_id,
+                        "detail": str(exc),
+                        "error_class": "queue_error",
+                    }
+                )
+                try:
+                    await asyncio.wait_for(stop_event.wait(), timeout=1)
+                except asyncio.TimeoutError:
+                    pass
+
     if settings.cleanup_enabled:
         tasks.append(asyncio.create_task(_periodic_cleanup_loop()))
     if settings.autoscale_enabled:
         executor.resize(max(settings.min_workers, min(settings.worker_count, settings.max_workers)))
         tasks.append(asyncio.create_task(_autoscale_workers_loop()))
+    if _use_external_durable_queue():
+        for consumer_id in range(max(1, settings.queue_consumer_count)):
+            tasks.append(asyncio.create_task(_durable_queue_consumer_loop(consumer_id)))
     yield
     stop_event.set()
     for task in tasks:
@@ -417,6 +467,25 @@ def _persist_chunk(
     return result.key, result.etag
 
 
+def _persist_chunk_via_durable_queue(
+    upload_id: str, chunk_index: int, data: bytes, multipart_upload_id: str | None
+) -> tuple[str, str | None]:
+    task = ChunkWriteTask.from_bytes(
+        upload_id=upload_id,
+        chunk_index=chunk_index,
+        data=data,
+        multipart_upload_id=multipart_upload_id,
+    )
+    durable_queue.enqueue(task)
+    outcome = chunk_result_store.wait(task.task_id, timeout_seconds=settings.queue_task_timeout_seconds)
+    if outcome is None:
+        raise HTTPException(status_code=504, detail="chunk task timeout while waiting for durable queue result")
+    success, payload = outcome
+    if not success:
+        raise RuntimeError(payload["error"])
+    return payload["key"], payload["etag"]
+
+
 @app.put(
     "/v1/uploads/{upload_id}/chunks/{chunk_index}",
     response_model=UploadChunkResponse,
@@ -476,10 +545,15 @@ async def upload_chunk(
         retries = 0
         while True:
             try:
-                future = executor.submit(
-                    _persist_chunk, upload_id, chunk_index, body, upload.multipart_upload_id
-                )
-                s3_key, s3_etag = future.result()
+                if _use_external_durable_queue():
+                    s3_key, s3_etag = _persist_chunk_via_durable_queue(
+                        upload_id, chunk_index, body, upload.multipart_upload_id
+                    )
+                else:
+                    future = executor.submit(
+                        _persist_chunk, upload_id, chunk_index, body, upload.multipart_upload_id
+                    )
+                    s3_key, s3_etag = future.result()
                 break
             except HTTPException:
                 raise

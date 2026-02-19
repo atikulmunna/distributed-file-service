@@ -43,6 +43,13 @@ class Settings(BaseSettings):
     scale_up_queue_threshold: int = 1
     scale_up_utilization_threshold: float = 0.8
     scale_down_utilization_threshold: float = 0.2
+    queue_backend: str = "memory"
+    queue_consumer_count: int = 4
+    queue_poll_timeout_seconds: int = 5
+    queue_task_timeout_seconds: int = 45
+    redis_url: str = "redis://localhost:6379/0"
+    redis_queue_name: str = "dfs-chunk-tasks"
+    sqs_queue_url: str = ""
     cleanup_enabled: bool = False
     cleanup_interval_seconds: int = 900
     stale_upload_ttl_seconds: int = 86400

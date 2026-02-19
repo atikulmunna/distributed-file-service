@@ -87,6 +87,13 @@ Environment variables (defaults in `app/config.py`):
 - `SCALE_UP_QUEUE_THRESHOLD`
 - `SCALE_UP_UTILIZATION_THRESHOLD`
 - `SCALE_DOWN_UTILIZATION_THRESHOLD`
+- `QUEUE_BACKEND` (`memory`, `redis`, `sqs`)
+- `QUEUE_CONSUMER_COUNT`
+- `QUEUE_POLL_TIMEOUT_SECONDS`
+- `QUEUE_TASK_TIMEOUT_SECONDS`
+- `REDIS_URL` (used when `QUEUE_BACKEND=redis`)
+- `REDIS_QUEUE_NAME` (used when `QUEUE_BACKEND=redis`)
+- `SQS_QUEUE_URL` (used when `QUEUE_BACKEND=sqs`)
 - `CLEANUP_ENABLED` (`true`/`false`)
 - `CLEANUP_INTERVAL_SECONDS`
 - `STALE_UPLOAD_TTL_SECONDS`
@@ -232,3 +239,26 @@ set RUN_R2_INTEGRATION=1
 pytest -q tests/test_r2_integration_optional.py
 pytest -q tests/test_api_r2_integration_optional.py
 ```
+
+## External Durable Queue (Redis/SQS)
+Default mode is in-process queue (`QUEUE_BACKEND=memory`).
+
+Redis path:
+```bash
+set QUEUE_BACKEND=redis
+set REDIS_URL=redis://localhost:6379/0
+set REDIS_QUEUE_NAME=dfs-chunk-tasks
+set QUEUE_CONSUMER_COUNT=4
+```
+
+SQS path:
+```bash
+set QUEUE_BACKEND=sqs
+set SQS_QUEUE_URL=https://sqs.<region>.amazonaws.com/<account>/<queue-name>
+set AWS_REGION=us-east-1
+set QUEUE_CONSUMER_COUNT=4
+```
+
+Notes:
+- In `redis`/`sqs` mode, chunk write tasks are enqueued durably and processed by queue consumer loops.
+- API requests still wait for task completion (same contract as before), but queue durability improves crash recovery characteristics.
