@@ -86,9 +86,11 @@ class S3ChunkStorage(ChunkStorage):
     def write_chunk(
         self, upload_id: str, chunk_index: int, data: bytes, multipart_upload_id: str | None = None
     ) -> StorageWriteResult:
-        if not multipart_upload_id:
-            raise ValueError("multipart_upload_id is required for s3 backend")
         key = self.chunk_key(upload_id, chunk_index)
+        if not multipart_upload_id:
+            put_result = self.client.put_object(Bucket=self.bucket, Key=key, Body=data)
+            return StorageWriteResult(key=key, etag=put_result.get("ETag"))
+
         assembled_key = self._assembled_key(upload_id)
         result = self.client.upload_part(
             Bucket=self.bucket,
@@ -97,7 +99,6 @@ class S3ChunkStorage(ChunkStorage):
             UploadId=multipart_upload_id,
             Body=data,
         )
-        # Keep per-chunk objects for current download path.
         self.client.put_object(Bucket=self.bucket, Key=key, Body=data)
         return StorageWriteResult(key=key, etag=result.get("ETag"))
 

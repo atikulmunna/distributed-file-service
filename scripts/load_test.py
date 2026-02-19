@@ -32,11 +32,13 @@ def _upload_one_file(
     payload: bytes,
     chunk_size: int,
     per_file_chunk_workers: int,
+    headers: dict[str, str],
 ) -> dict:
     started = time.perf_counter()
     init_resp = client.post(
         f"{base_url}/v1/uploads/init",
         json={"file_name": file_name, "file_size": len(payload), "chunk_size": chunk_size},
+        headers=headers,
         timeout=30.0,
     )
     init_resp.raise_for_status()
@@ -50,7 +52,7 @@ def _upload_one_file(
         resp = client.put(
             f"{base_url}/v1/uploads/{upload_id}/chunks/{index}",
             content=chunk,
-            headers={"Content-Length": str(len(chunk))},
+            headers={**headers, "Content-Length": str(len(chunk))},
             timeout=60.0,
         )
         resp.raise_for_status()
@@ -61,7 +63,7 @@ def _upload_one_file(
         for fut in as_completed(futures):
             fut.result()
 
-    complete = client.post(f"{base_url}/v1/uploads/{upload_id}/complete", timeout=30.0)
+    complete = client.post(f"{base_url}/v1/uploads/{upload_id}/complete", headers=headers, timeout=30.0)
     complete.raise_for_status()
 
     total_ms = (time.perf_counter() - started) * 1000
@@ -99,6 +101,11 @@ def main() -> int:
         help="Parallel chunk uploads per file (client-side). Overrides profile if set.",
     )
     parser.add_argument("--output", default="", help="Optional path to write JSON summary")
+    parser.add_argument(
+        "--api-key",
+        default=os.getenv("LOAD_TEST_API_KEY", "dev-key"),
+        help="API key sent as X-API-Key header.",
+    )
     args = parser.parse_args()
     profile = PROFILE_PRESETS[args.profile]
     concurrent_files = args.concurrent_files if args.concurrent_files is not None else profile["concurrent_files"]
@@ -109,6 +116,7 @@ def main() -> int:
     )
 
     payload = _build_payload(args.file_size_bytes)
+    headers = {"X-API-Key": args.api_key}
     upload_jobs = [f"load-file-{uuid.uuid4()}.bin" for _ in range(args.files)]
 
     run_started = time.perf_counter()
@@ -124,6 +132,7 @@ def main() -> int:
                 payload,
                 args.chunk_size_bytes,
                 per_file_chunk_workers,
+                headers,
             )
             for file_name in upload_jobs
         ]
@@ -145,6 +154,7 @@ def main() -> int:
         "file_size_bytes": args.file_size_bytes,
         "chunk_size_bytes": args.chunk_size_bytes,
         "profile": args.profile,
+        "api_key_used": bool(args.api_key),
         "concurrent_files": concurrent_files,
         "per_file_chunk_workers": per_file_chunk_workers,
         "elapsed_seconds": round(elapsed, 3),

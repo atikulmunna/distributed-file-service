@@ -1,0 +1,15 @@
+{
+  "base_url": "http://127.0.0.1:8000",
+  "files": 6,
+  "file_size_bytes": 2097152,
+  "chunk_size_bytes": 524288,
+  "concurrent_files": 2,
+  "per_file_chunk_workers": 2,
+  "elapsed_seconds": 31.262,
+  "total_bytes_uploaded": 12582912,
+  "total_chunks_uploaded": 24,
+  "throughput_mb_per_s": 0.384,
+  "chunk_latency_ms_avg": 3012.937,
+  "chunk_latency_ms_p95": 7452.314,
+  "file_total_ms_avg": 10039.62
+}

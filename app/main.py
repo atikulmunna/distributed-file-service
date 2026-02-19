@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.auth import AuthUser, require_api_user
 from app.config import settings
 from app.db import get_db
 from app.limits import PerUploadInflightLimiter
@@ -61,6 +62,7 @@ if not request_logger.handlers:
     handler.setFormatter(logging.Formatter("%(message)s"))
     request_logger.addHandler(handler)
 request_logger.setLevel(logging.INFO)
+MIN_MULTIPART_PART_SIZE = 5 * 1024 * 1024
 
 
 def _fingerprint(obj: dict) -> str:
@@ -77,6 +79,15 @@ def _upload_id(request: Request) -> str | None:
 
 def _log_event(payload: dict) -> None:
     request_logger.info(json.dumps(payload, sort_keys=True, separators=(",", ":")))
+
+
+def _get_owned_upload(db: Session, upload_id: str, user: AuthUser) -> Upload:
+    upload = db.get(Upload, upload_id)
+    if not upload:
+        raise HTTPException(status_code=404, detail="upload not found")
+    if upload.owner_id != user.user_id:
+        raise HTTPException(status_code=403, detail="forbidden for this upload owner")
+    return upload
 
 
 @app.middleware("http")
@@ -151,6 +162,7 @@ def metrics() -> Response:
 def init_upload(
     payload: InitUploadRequest,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    user: AuthUser = Depends(require_api_user),
     db: Session = Depends(get_db),
 ) -> InitUploadResponse:
     chunk_size = payload.chunk_size or settings.chunk_size_bytes
@@ -164,6 +176,8 @@ def init_upload(
                 raise HTTPException(status_code=409, detail="idempotency key reused with different init payload")
             existing_upload = db.get(Upload, existing_request.upload_id)
             if existing_upload:
+                if existing_upload.owner_id != user.user_id:
+                    raise HTTPException(status_code=403, detail="idempotency key belongs to a different owner")
                 return InitUploadResponse(
                     upload_id=existing_upload.id,
                     chunk_size=existing_upload.chunk_size,
@@ -173,6 +187,7 @@ def init_upload(
 
     total_chunks = math.ceil(payload.file_size / chunk_size)
     upload = Upload(
+        owner_id=user.user_id,
         file_name=payload.file_name,
         file_size=payload.file_size,
         chunk_size=chunk_size,
@@ -181,11 +196,17 @@ def init_upload(
     )
     db.add(upload)
     db.flush()
-    try:
-        upload.multipart_upload_id = storage.initialize_upload(upload.id)
-    except Exception as exc:
-        db.rollback()
-        raise HTTPException(status_code=500, detail=f"failed to initialize upload storage: {exc}") from exc
+    use_multipart = (
+        settings.storage_backend.lower() in ("s3", "r2")
+        and total_chunks > 1
+        and chunk_size >= MIN_MULTIPART_PART_SIZE
+    )
+    if use_multipart:
+        try:
+            upload.multipart_upload_id = storage.initialize_upload(upload.id)
+        except Exception as exc:
+            db.rollback()
+            raise HTTPException(status_code=500, detail=f"failed to initialize upload storage: {exc}") from exc
     if idempotency_key:
         db.add(
             InitRequestIdempotency(
@@ -221,11 +242,10 @@ async def upload_chunk(
     request: Request,
     content_length: int = Header(default=0),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    user: AuthUser = Depends(require_api_user),
     db: Session = Depends(get_db),
 ) -> UploadChunkResponse:
-    upload = db.get(Upload, upload_id)
-    if not upload:
-        raise HTTPException(status_code=404, detail="upload not found")
+    upload = _get_owned_upload(db, upload_id, user)
     if upload.status not in (UploadStatus.in_progress.value, UploadStatus.initiated.value):
         raise HTTPException(status_code=409, detail="upload is not accepting chunks")
     if chunk_index < 0 or chunk_index >= upload.total_chunks:
@@ -320,12 +340,11 @@ async def upload_chunk(
 def complete_upload(
     upload_id: str,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    user: AuthUser = Depends(require_api_user),
     db: Session = Depends(get_db),
 ) -> CompleteUploadResponse:
     request_fingerprint = _fingerprint({"upload_id": upload_id})
-    upload = db.get(Upload, upload_id)
-    if not upload:
-        raise HTTPException(status_code=404, detail="upload not found")
+    upload = _get_owned_upload(db, upload_id, user)
 
     if idempotency_key:
         existing_request = db.get(CompleteRequestIdempotency, idempotency_key)
@@ -335,6 +354,8 @@ def complete_upload(
             if existing_request.upload_id == upload_id:
                 existing_upload = db.get(Upload, upload_id)
                 if existing_upload:
+                    if existing_upload.owner_id != user.user_id:
+                        raise HTTPException(status_code=403, detail="idempotency key belongs to a different owner")
                     return CompleteUploadResponse(upload_id=existing_upload.id, status=existing_upload.status)
 
     if upload.status == UploadStatus.initiated.value:
@@ -362,7 +383,7 @@ def complete_upload(
         raise HTTPException(status_code=409, detail="cannot complete upload, missing chunks")
 
     uploaded_chunks = list(db.scalars(select(Chunk).where(Chunk.upload_id == upload_id).order_by(Chunk.chunk_index)).all())
-    if settings.storage_backend.lower() == "s3":
+    if settings.storage_backend.lower() in ("s3", "r2") and upload.multipart_upload_id:
         parts: list[dict] = []
         for chunk in uploaded_chunks:
             if not chunk.s3_etag:
@@ -387,10 +408,12 @@ def complete_upload(
 
 
 @app.get("/v1/uploads/{upload_id}/missing-chunks", response_model=MissingChunksResponse)
-def missing_chunks(upload_id: str, db: Session = Depends(get_db)) -> MissingChunksResponse:
-    upload = db.get(Upload, upload_id)
-    if not upload:
-        raise HTTPException(status_code=404, detail="upload not found")
+def missing_chunks(
+    upload_id: str,
+    user: AuthUser = Depends(require_api_user),
+    db: Session = Depends(get_db),
+) -> MissingChunksResponse:
+    upload = _get_owned_upload(db, upload_id, user)
 
     uploaded_indexes = set(
         db.scalars(
@@ -435,10 +458,13 @@ def _stream_bytes_for_range(chunks: list[Chunk], start: int, end: int) -> Iterat
 
 
 @app.get("/v1/uploads/{upload_id}/download")
-def download(upload_id: str, range: str | None = Header(default=None), db: Session = Depends(get_db)) -> Response:
-    upload = db.get(Upload, upload_id)
-    if not upload:
-        raise HTTPException(status_code=404, detail="upload not found")
+def download(
+    upload_id: str,
+    range: str | None = Header(default=None),
+    user: AuthUser = Depends(require_api_user),
+    db: Session = Depends(get_db),
+) -> Response:
+    upload = _get_owned_upload(db, upload_id, user)
     if upload.status != UploadStatus.completed.value:
         raise HTTPException(status_code=409, detail="upload is not completed")
 

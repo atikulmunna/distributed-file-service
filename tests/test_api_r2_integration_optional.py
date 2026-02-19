@@ -42,6 +42,7 @@ def test_api_r2_full_upload_download_flow() -> None:
     file_name = f"r2-api-{uuid.uuid4()}.bin"
 
     with TestClient(app) as client:
+        client.headers.update({"X-API-Key": "dev-key"})
         init = client.post(
             "/v1/uploads/init",
             json={"file_name": file_name, "file_size": len(file_bytes), "chunk_size": chunk_size},

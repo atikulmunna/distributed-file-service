@@ -34,7 +34,7 @@ def test_request_completed_log_contains_request_id(caplog) -> None:
 def test_request_error_log_contains_upload_and_error_class(caplog) -> None:
     caplog.set_level("INFO", logger="dfs.request")
     with TestClient(app) as client:
-        response = client.post("/v1/uploads/not-found/complete")
+        response = client.post("/v1/uploads/not-found/complete", headers={"X-API-Key": "dev-key"})
         assert response.status_code == 404
 
     events = _events_from_caplog(caplog)

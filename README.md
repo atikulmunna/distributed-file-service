@@ -37,6 +37,7 @@ Environment variables (defaults in `app/config.py`):
 - `R2_ACCESS_KEY_ID`
 - `R2_SECRET_ACCESS_KEY`
 - `R2_ENDPOINT_URL` (optional override)
+- `API_KEY_MAPPINGS` (format: `apiKey:userId,apiKey2:userId2`)
 - `CHUNK_SIZE_BYTES`
 - `MAX_RETRIES`
 - `MAX_INFLIGHT_CHUNKS_PER_UPLOAD`
@@ -57,6 +58,8 @@ alembic downgrade -1
 ```
 
 ## API
+All `/v1/*` endpoints require `X-API-Key` header.
+
 1. `POST /v1/uploads/init`
 2. `PUT /v1/uploads/{upload_id}/chunks/{chunk_index}`
 3. `POST /v1/uploads/{upload_id}/complete`
@@ -82,6 +85,7 @@ Profiles:
 You can still override profile values with:
 - `--concurrent-files`
 - `--per-file-chunk-workers`
+- `--api-key` (default from `LOAD_TEST_API_KEY`, else `dev-key`)
 
 Use `benchmarks/BASELINE_TEMPLATE.md` to record benchmark runs consistently.
 
