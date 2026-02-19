@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from collections.abc import Iterator
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request, Response
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from opentelemetry import trace
@@ -49,6 +49,7 @@ from app.schemas import (
 from app.db import SessionLocal
 from app.storage import storage
 from app.tracing import setup_tracing
+from app.ui import ui_html
 from app.worker import executor
 
 @asynccontextmanager
@@ -289,6 +290,12 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/", response_class=HTMLResponse)
+@app.get("/ui", response_class=HTMLResponse)
+def web_console() -> HTMLResponse:
+    return HTMLResponse(content=ui_html())
 
 
 @app.get("/metrics")

@@ -16,6 +16,7 @@ This repository contains a runnable MVP backend for chunked uploads/downloads ba
 - Structured audit logs (`dfs.audit`) for init/complete/download actions
 - Request-latency histogram (`http_request_duration_seconds`) for p95/p99 tracking
 - Optional adaptive worker autoscaling with cooldown/hysteresis
+- Lightweight built-in web console at `/ui` for demo and manual validation
 
 Storage defaults to local filesystem, and DB defaults to SQLite.
 You can switch to PostgreSQL via `DATABASE_URL` and use S3-compatible backends (`s3` or `r2`).
@@ -38,6 +39,7 @@ docker compose up --build
 Service will be available at:
 - API: `http://127.0.0.1:8000`
 - Metrics: `http://127.0.0.1:8000/metrics`
+- Web Console: `http://127.0.0.1:8000/ui`
 
 Notes:
 - `docker-compose.yml` overrides `DATABASE_URL` to PostgreSQL inside the Docker network.
@@ -160,6 +162,10 @@ Use `benchmarks/BASELINE_TEMPLATE.md` to record benchmark runs consistently.
 ## Monitoring Alerts
 Sample Prometheus alert rules are provided in:
 - `monitoring/alerts.yml`
+
+Grafana dashboard template:
+- `monitoring/grafana/dashboards/dfs-overview.json`
+- Import this JSON in Grafana and bind it to your Prometheus datasource UID (`prometheus` by default).
 
 They cover:
 - high throttling rate
