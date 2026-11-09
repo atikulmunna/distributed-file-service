@@ -10,8 +10,12 @@ THROTTLE_HEADERS_BASE = {"Retry-After": "1"}
 
 
 class BackpressureExecutor:
+    """Fixed-size pool for storage writes with bounded admission: 429 when the queue or the global
+    in-flight limit is full. The size is fixed: autoscaling was measured and did not help."""
+
     def __init__(self, workers: int, queue_maxsize: int, global_inflight_limit: int) -> None:
-        self.executor = ThreadPoolExecutor(max_workers=workers)
+        self.workers = workers
+        self.executor = ThreadPoolExecutor(max_workers=workers, thread_name_prefix="storage")
         self.queue_maxsize = queue_maxsize
         self.global_inflight_limit = global_inflight_limit
         self._lock = Lock()
@@ -44,13 +48,13 @@ class BackpressureExecutor:
             self._inflight += 1
             task_queue_depth.set(self._queued)
             inflight_chunks.set(self._inflight)
-            worker_busy_count.set(min(self._inflight, self.executor._max_workers))
+            worker_busy_count.set(min(self._inflight, self.workers))
 
     def _on_end(self) -> None:
         with self._lock:
             self._inflight -= 1
             inflight_chunks.set(self._inflight)
-            worker_busy_count.set(min(self._inflight, self.executor._max_workers))
+            worker_busy_count.set(min(self._inflight, self.workers))
 
     def submit(self, fn, *args, **kwargs) -> Future:
         self._try_admit()
@@ -63,21 +67,6 @@ class BackpressureExecutor:
                 self._on_end()
 
         return self.executor.submit(wrapped)
-
-    def snapshot(self) -> tuple[int, int, int]:
-        with self._lock:
-            return self._queued, self._inflight, self.executor._max_workers
-
-    def resize(self, workers: int) -> None:
-        if workers <= 0:
-            return
-        with self._lock:
-            if workers == self.executor._max_workers:
-                return
-            self.executor._max_workers = workers
-            self.executor._adjust_thread_count()
-            worker_count.set(workers)
-            worker_busy_count.set(min(self._inflight, workers))
 
 
 executor = BackpressureExecutor(

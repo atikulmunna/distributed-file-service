@@ -12,7 +12,7 @@ class UploadStatus(str, enum.Enum):
     initiated = "INITIATED"
     in_progress = "IN_PROGRESS"
     completing = "COMPLETING"  # claimed by one complete request; storage work in progress
-    verifying = "VERIFYING"  # whole-file checksum verification pending (Task 12)
+    verifying = "VERIFYING"  # whole-file checksum verification pending (asynchronous, by a finalizer worker)
     completed = "COMPLETED"
     failed = "FAILED"
     aborted = "ABORTED"

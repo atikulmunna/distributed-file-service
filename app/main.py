@@ -18,7 +18,6 @@ from app.routes.uploads import (
     upload_limiter,  # noqa: F401  (re-exported: tests and tools import it from app.main)
 )
 from app.tracing import setup_tracing
-from app.worker import executor
 
 
 @asynccontextmanager
@@ -37,45 +36,8 @@ async def lifespan(_: FastAPI):
             except asyncio.TimeoutError:
                 pass
 
-    async def _autoscale_workers_loop() -> None:
-        while not stop_event.is_set():
-            try:
-                queued, inflight, current = executor.snapshot()
-                utilization = inflight / max(1, current)
-                desired = current
-                if (
-                    queued >= settings.scale_up_queue_threshold
-                    and utilization >= settings.scale_up_utilization_threshold
-                    and current < settings.max_workers
-                ):
-                    desired = current + 1
-                elif queued == 0 and utilization <= settings.scale_down_utilization_threshold and current > settings.min_workers:
-                    desired = current - 1
-
-                if desired != current:
-                    executor.resize(desired)
-                    log_event(
-                        {
-                            "event": "worker_pool_scaled",
-                            "from_workers": current,
-                            "to_workers": desired,
-                            "queued": queued,
-                            "inflight": inflight,
-                            "utilization": round(utilization, 3),
-                        }
-                    )
-            except Exception as exc:
-                log_event({"event": "autoscale_error", "detail": str(exc), "error_class": "maintenance_error"})
-            try:
-                await asyncio.wait_for(stop_event.wait(), timeout=max(1, settings.autoscale_cooldown_seconds))
-            except asyncio.TimeoutError:
-                pass
-
     if settings.cleanup_enabled:
         tasks.append(asyncio.create_task(_periodic_cleanup_loop()))
-    if settings.autoscale_enabled:
-        executor.resize(max(settings.min_workers, min(settings.worker_count, settings.max_workers)))
-        tasks.append(asyncio.create_task(_autoscale_workers_loop()))
     worker_stop = threading.Event()
     workers = []
     if settings.finalizer_in_process:

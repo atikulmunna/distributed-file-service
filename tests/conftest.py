@@ -33,7 +33,6 @@ os.environ.update(
         "API_KEY_MAPPINGS": "dev-key:dev-user,other-key:other-user",
         "ADMIN_USER_IDS": "dev-user",
         "CLEANUP_ENABLED": "false",
-        "AUTOSCALE_ENABLED": "false",
         "TRACING_ENABLED": "false",
         "API_RATE_LIMIT_PER_MINUTE": "0",
         # Tests drive verification explicitly; the end-to-end test turns the in-process worker on.

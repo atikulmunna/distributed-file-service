@@ -10,11 +10,18 @@ class Base(DeclarativeBase):
     pass
 
 
-engine_kwargs: dict = {"future": True}
-if settings.database_url.startswith("sqlite"):
-    engine_kwargs["connect_args"] = {"check_same_thread": False}
+def engine_options(database_url: str) -> dict:
+    if database_url.startswith("sqlite"):
+        return {"connect_args": {"check_same_thread": False}}
+    return {
+        "pool_size": settings.db_pool_size,
+        "max_overflow": settings.db_max_overflow,
+        "pool_timeout": settings.db_pool_timeout_s,
+        "pool_pre_ping": True,  # drop connections the server or a proxy closed while idle
+    }
 
-engine = create_engine(settings.database_url, **engine_kwargs)
+
+engine = create_engine(settings.database_url, **engine_options(settings.database_url))
 
 if settings.database_url.startswith("sqlite"):
 

@@ -54,7 +54,7 @@ class Settings(BaseSettings):
     # that many in flight (memory about (prefetch + 1) segments). Measured on the local bench stack
     # (near-zero storage latency): one streaming GET read 2233 MiB/s, 8 MiB ranged GETs 514 MiB/s at
     # prefetch 1 and 435 MiB/s at prefetch 4, so the default streams. Parallel ranged reads pay off on
-    # high-latency storage; set the production value from a real-S3 measurement (Task 22).
+    # high-latency storage; set the production value from a measurement against real S3.
     download_segment_bytes: int = 8 * 1024 * 1024
     download_prefetch: int = 1
     max_retries: int = 3  # retries after the first attempt, for transient storage errors only
@@ -68,14 +68,17 @@ class Settings(BaseSettings):
     max_fair_inflight_chunks_per_upload: int = 0
     max_global_inflight_chunks: int = 128
     task_queue_maxsize: int = 512
+    # Storage worker threads per instance, fixed. An autoscaler (8 to 32) improved neither throughput
+    # nor p95 and was removed; 32 fixed workers were no better than 16 (benchmarks/results/
+    # 2026-11-10_pool-sizing.json).
     worker_count: int = 16
-    autoscale_enabled: bool = False
-    min_workers: int = 8
-    max_workers: int = 32
-    autoscale_cooldown_seconds: int = 15
-    scale_up_queue_threshold: int = 1
-    scale_up_utilization_threshold: float = 0.8
-    scale_down_utilization_threshold: float = 0.2
+    # SQLAlchemy pool for Postgres (SQLite keeps its own pool). Requests hold a connection only for
+    # short transactions, never across storage calls. Measured on W2: 10/10 matched 20/20 on throughput
+    # and p95 and beat 5/10 by about 4%. Each process may open pool_size + max_overflow connections;
+    # keep (app instances + finalizers) x 20 under Postgres max_connections (100 by default).
+    db_pool_size: int = 10
+    db_max_overflow: int = 10
+    db_pool_timeout_s: int = 30
     # Job queue for post-completion verification: "memory" (in-process), "redis" (Streams), or "sqs".
     queue_backend: str = "memory"
     queue_poll_timeout_seconds: int = 5

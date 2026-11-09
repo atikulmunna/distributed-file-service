@@ -113,12 +113,11 @@ def test_s3_client_pool_sized_to_workers(monkeypatch) -> None:
     captured: list[dict] = []
     monkeypatch.setitem(sys.modules, "boto3", types.SimpleNamespace(client=lambda service, **kw: captured.append(kw) or object()))
     monkeypatch.setattr(settings, "worker_count", 16)
-    monkeypatch.setattr(settings, "max_workers", 32)
 
     S3ChunkStorage(bucket="b", region="us-east-1")
 
     config = captured[0]["config"]
-    assert config.max_pool_connections == 36  # max(worker_count, max_workers) + 4
+    assert config.max_pool_connections == 56  # storage workers (16) + request threads (40)
     assert config.connect_timeout == 5
     assert config.read_timeout == 60
     # one retry layer: the app's policy; boto makes a single attempt per call

@@ -223,8 +223,9 @@ class S3ChunkStorage(ChunkStorage):
         from botocore.config import Config
 
         client_kwargs["config"] = Config(
-            # Every worker thread can hold a connection; boto's default pool (10) is smaller than the pool.
-            max_pool_connections=max(settings.worker_count, settings.max_workers) + 4,
+            # Storage workers write chunks; request threads (anyio's pool, 40) stream downloads and
+            # verification reads. boto's default pool of 10 would make them queue for connections.
+            max_pool_connections=settings.worker_count + 40,
             connect_timeout=5,
             read_timeout=60,
             # One retry layer: the app's policy (app/storage_policy.py), so attempts do not multiply.

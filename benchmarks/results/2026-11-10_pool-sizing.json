@@ -1,0 +1,336 @@
+{
+  "description": "Fixed-size sizing after removing the autoscaler: storage worker count and the Postgres connection pool. Same image (current code), two configurations side by side on the local bench stack (Postgres 16, Versity S3 gateway), 3 interleaved rounds per workload, run order alternating each round.",
+  "workers": {
+    "configs": {
+      "workers16": "WORKER_COUNT=16",
+      "workers32": "WORKER_COUNT=32"
+    },
+    "W2": {
+      "runs": {
+        "workers16": [
+          {
+            "round": 1,
+            "ok": 100,
+            "up": 89.536,
+            "p50": 6924.258,
+            "p95": 12416.587,
+            "p99": 13140.754,
+            "errors": {}
+          },
+          {
+            "round": 2,
+            "ok": 100,
+            "up": 78.174,
+            "p50": 8076.645,
+            "p95": 12938.616,
+            "p99": 13636.3,
+            "errors": {}
+          },
+          {
+            "round": 3,
+            "ok": 100,
+            "up": 64.702,
+            "p50": 9370.302,
+            "p95": 15343.993,
+            "p99": 16624.46,
+            "errors": {}
+          }
+        ],
+        "workers32": [
+          {
+            "round": 1,
+            "ok": 100,
+            "up": 85.049,
+            "p50": 7293.666,
+            "p95": 13091.046,
+            "p99": 13613.643,
+            "errors": {}
+          },
+          {
+            "round": 2,
+            "ok": 100,
+            "up": 74.238,
+            "p50": 7537.204,
+            "p95": 13540.95,
+            "p99": 14991.624,
+            "errors": {}
+          },
+          {
+            "round": 3,
+            "ok": 100,
+            "up": 48.59,
+            "p50": 12072.698,
+            "p95": 22229.448,
+            "p99": 23748.015,
+            "errors": {}
+          }
+        ]
+      },
+      "median": {
+        "workers16": {
+          "upload_mib_per_s": 78.174,
+          "chunk_p50_ms": 8076.645,
+          "chunk_p95_ms": 12938.616
+        },
+        "workers32": {
+          "upload_mib_per_s": 74.238,
+          "chunk_p50_ms": 7537.204,
+          "chunk_p95_ms": 13540.95
+        }
+      },
+      "paired_upload_diff_mib_per_s": [
+        -4.5,
+        -3.9,
+        -16.1
+      ]
+    },
+    "W1": {
+      "runs": {
+        "workers16": [
+          {
+            "round": 1,
+            "ok": 20,
+            "up": 94.986,
+            "p50": 2244.392,
+            "p95": 2958.693,
+            "p99": 2993.45,
+            "errors": {}
+          },
+          {
+            "round": 2,
+            "ok": 20,
+            "up": 53.72,
+            "p50": 3336.313,
+            "p95": 9590.136,
+            "p99": 9792.798,
+            "errors": {}
+          },
+          {
+            "round": 3,
+            "ok": 20,
+            "up": 86.152,
+            "p50": 2456.303,
+            "p95": 3332.75,
+            "p99": 3395.696,
+            "errors": {}
+          }
+        ],
+        "workers32": [
+          {
+            "round": 1,
+            "ok": 20,
+            "up": 93.268,
+            "p50": 2215.728,
+            "p95": 3308.227,
+            "p99": 3330.623,
+            "errors": {}
+          },
+          {
+            "round": 2,
+            "ok": 20,
+            "up": 104.748,
+            "p50": 2049.368,
+            "p95": 2662.838,
+            "p99": 2722.203,
+            "errors": {}
+          },
+          {
+            "round": 3,
+            "ok": 20,
+            "up": 89.196,
+            "p50": 2301.965,
+            "p95": 3174.378,
+            "p99": 3253.113,
+            "errors": {}
+          }
+        ]
+      },
+      "median": {
+        "workers16": {
+          "upload_mib_per_s": 86.152,
+          "chunk_p50_ms": 2456.303,
+          "chunk_p95_ms": 3332.75
+        },
+        "workers32": {
+          "upload_mib_per_s": 93.268,
+          "chunk_p50_ms": 2215.728,
+          "chunk_p95_ms": 3174.378
+        }
+      },
+      "paired_upload_diff_mib_per_s": [
+        -1.7,
+        51.0,
+        3.0
+      ]
+    },
+    "decision": "worker_count = 16",
+    "interpretation": "32 workers were slower on W2 in 3/3 paired rounds (median throughput -5.0%, p95 +4.7%). W1 was mixed; its +8.3% median gain comes from one 16-worker round at 53.7 MiB/s, the other two pairs differ by -1.7 and +3.0. No consistent gain, so the smaller pool stays."
+  },
+  "db_pool": {
+    "configs": {
+      "pool5_10": "DB_POOL_SIZE=5 DB_MAX_OVERFLOW=10 (SQLAlchemy default)",
+      "pool10_10": "DB_POOL_SIZE=10 DB_MAX_OVERFLOW=10",
+      "pool20_20": "DB_POOL_SIZE=20 DB_MAX_OVERFLOW=20"
+    },
+    "W2_5_10_vs_20_20": {
+      "runs": {
+        "pool5_10": [
+          {
+            "round": 1,
+            "ok": 100,
+            "up": 83.355,
+            "p50": 6637.18,
+            "p95": 12240.035,
+            "p99": 12810.89,
+            "errors": {}
+          },
+          {
+            "round": 2,
+            "ok": 100,
+            "up": 81.065,
+            "p50": 6837.745,
+            "p95": 12547.145,
+            "p99": 13404.437,
+            "errors": {}
+          },
+          {
+            "round": 3,
+            "ok": 100,
+            "up": 85.199,
+            "p50": 6658.783,
+            "p95": 12629.291,
+            "p99": 13346.145,
+            "errors": {}
+          }
+        ],
+        "pool20_20": [
+          {
+            "round": 1,
+            "ok": 100,
+            "up": 86.944,
+            "p50": 6521.529,
+            "p95": 12646.058,
+            "p99": 13451.509,
+            "errors": {}
+          },
+          {
+            "round": 2,
+            "ok": 100,
+            "up": 86.009,
+            "p50": 6546.743,
+            "p95": 12817.809,
+            "p99": 13569.245,
+            "errors": {}
+          },
+          {
+            "round": 3,
+            "ok": 100,
+            "up": 89.018,
+            "p50": 6425.49,
+            "p95": 12253.064,
+            "p99": 13114.6,
+            "errors": {}
+          }
+        ]
+      },
+      "median": {
+        "pool5_10": {
+          "upload_mib_per_s": 83.355,
+          "chunk_p50_ms": 6658.783,
+          "chunk_p95_ms": 12547.145
+        },
+        "pool20_20": {
+          "upload_mib_per_s": 86.944,
+          "chunk_p50_ms": 6521.529,
+          "chunk_p95_ms": 12646.058
+        }
+      },
+      "paired_upload_diff_mib_per_s": [
+        3.6,
+        4.9,
+        3.8
+      ]
+    },
+    "W2_10_10_vs_20_20": {
+      "runs": {
+        "pool10_10": [
+          {
+            "round": 1,
+            "ok": 100,
+            "up": 89.177,
+            "p50": 7060.714,
+            "p95": 11943.811,
+            "p99": 12620.359,
+            "errors": {}
+          },
+          {
+            "round": 2,
+            "ok": 100,
+            "up": 87.847,
+            "p50": 6649.347,
+            "p95": 12659.642,
+            "p99": 13409.572,
+            "errors": {}
+          },
+          {
+            "round": 3,
+            "ok": 100,
+            "up": 90.3,
+            "p50": 6410.209,
+            "p95": 12173.259,
+            "p99": 12910.326,
+            "errors": {}
+          }
+        ],
+        "pool20_20": [
+          {
+            "round": 1,
+            "ok": 100,
+            "up": 89.713,
+            "p50": 6301.978,
+            "p95": 12097.566,
+            "p99": 12517.822,
+            "errors": {}
+          },
+          {
+            "round": 2,
+            "ok": 100,
+            "up": 83.425,
+            "p50": 6308.978,
+            "p95": 12300.508,
+            "p99": 13228.839,
+            "errors": {}
+          },
+          {
+            "round": 3,
+            "ok": 100,
+            "up": 89.227,
+            "p50": 6266.235,
+            "p95": 11782.308,
+            "p99": 12685.31,
+            "errors": {}
+          }
+        ]
+      },
+      "median": {
+        "pool10_10": {
+          "upload_mib_per_s": 89.177,
+          "chunk_p50_ms": 6649.347,
+          "chunk_p95_ms": 12173.259
+        },
+        "pool20_20": {
+          "upload_mib_per_s": 89.227,
+          "chunk_p50_ms": 6301.978,
+          "chunk_p95_ms": 12097.566
+        }
+      },
+      "paired_upload_diff_mib_per_s": [
+        0.5,
+        -4.4,
+        -1.1
+      ]
+    },
+    "decision": "db_pool_size = 10, db_max_overflow = 10",
+    "interpretation": "20/20 beat 5/10 on throughput in 3/3 paired rounds (+4.3% median), with p95 flat; small, and 3/3 can happen by chance 1 time in 8. 10/10 matched 20/20 on throughput (+0.1%) and p95 (-0.6%); 20/20 had a lower p50 (-5.2%). A likely cause: with pool_size 5, connections above 5 are closed on return and reopened under load. 10/10 caps a process at 20 connections, so two app instances plus one finalizer use at most 60 of Postgres's default 100; 20/20 would allow 120."
+  }
+}
