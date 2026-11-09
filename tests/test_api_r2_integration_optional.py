@@ -4,7 +4,7 @@ import uuid
 import pytest
 from fastapi.testclient import TestClient
 
-import app.main as app_main
+import app.routes.uploads as upload_routes
 from app.config import settings
 from app.main import app
 from app.storage import S3ChunkStorage
@@ -35,7 +35,7 @@ def test_api_r2_full_upload_download_flow(monkeypatch) -> None:
         secret_access_key=R2_SECRET_ACCESS_KEY,
     )
     monkeypatch.setattr(settings, "storage_backend", "r2")
-    monkeypatch.setattr(app_main, "storage", storage)
+    monkeypatch.setattr(upload_routes, "storage", storage)
 
     file_bytes = b"hello-r2-api-test"
     chunk_size = 6
