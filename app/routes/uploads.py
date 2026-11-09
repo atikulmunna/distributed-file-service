@@ -138,31 +138,33 @@ def init_upload(
         db.add(
             InitRequestIdempotency(
                 idempotency_key=idempotency_key,
-                upload_id=upload.id,
+                upload_id=upload_id,
                 request_fingerprint=request_fingerprint,
             )
         )
     db.commit()
-    db.refresh(upload)
+    # Do not touch the ORM object after commit: reloading it would open a new transaction and
+    # hold the connection until the response is validated, which needs a free worker thread.
+    status = UploadStatus.initiated.value
     audit_event(
         {
             "event": "audit",
             "action": "upload_init",
             "request_id": request_id_of(request),
-            "upload_id": upload.id,
+            "upload_id": upload_id,
             "user_id": user.user_id,
-            "status": upload.status,
-            "file_size": upload.file_size,
-            "chunk_size": upload.chunk_size,
-            "total_chunks": upload.total_chunks,
+            "status": status,
+            "file_size": payload.file_size,
+            "chunk_size": chunk_size,
+            "total_chunks": total_chunks,
         }
     )
 
     return InitUploadResponse(
-        upload_id=upload.id,
-        chunk_size=upload.chunk_size,
-        total_chunks=upload.total_chunks,
-        status=upload.status,
+        upload_id=upload_id,
+        chunk_size=chunk_size,
+        total_chunks=total_chunks,
+        status=status,
     )
 
 

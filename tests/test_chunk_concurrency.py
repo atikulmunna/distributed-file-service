@@ -181,3 +181,53 @@ def test_no_db_connection_held_during_storage_init(client, auth_headers, monkeyp
 
         assert db.get(Upload, upload_id).multipart_upload_id == "mp-test"
     assert held_during_init == 0
+
+
+def test_init_releases_db_connection_before_responding(client, auth_headers) -> None:
+    """Holding a connection past commit deadlocks under load: response validation for sync
+    endpoints needs a worker thread, and every worker thread may be waiting for a connection."""
+    import logging
+
+    held_at_audit: list[int] = []
+
+    class _PoolProbe(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            held_at_audit.append(engine.pool.checkedout())
+
+    probe = _PoolProbe()
+    audit_logger = logging.getLogger("dfs.audit")
+    audit_logger.addHandler(probe)
+    try:
+        response = client.post(
+            "/v1/uploads/init", json={"file_name": "a.bin", "file_size": 10, "chunk_size": 5}, headers=auth_headers
+        )
+    finally:
+        audit_logger.removeHandler(probe)
+    assert response.status_code == 201
+    assert held_at_audit == [0]
+
+
+def test_concurrent_inits_exceeding_worker_threads_and_db_pool_succeed(live_server, small_pool, auth_headers) -> None:
+    """Regression for the W2 failure: 60 simultaneous inits, 40 worker threads, 2 DB connections."""
+    inits = 60
+    statuses: list[int] = []
+    with httpx.Client(base_url=live_server, timeout=30.0, limits=httpx.Limits(max_connections=inits + 5)) as http:
+
+        def init(index: int) -> None:
+            response = http.post(
+                "/v1/uploads/init",
+                json={"file_name": f"f{index}.bin", "file_size": 10, "chunk_size": 5},
+                headers=auth_headers,
+            )
+            statuses.append(response.status_code)
+
+        threads = [threading.Thread(target=init, args=(i,)) for i in range(inits)]
+        started = time.perf_counter()
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        elapsed = time.perf_counter() - started
+
+    assert sorted(statuses) == [201] * inits
+    assert elapsed < 3.0, f"{inits} inits took {elapsed:.1f} s (waited on the DB pool)"
