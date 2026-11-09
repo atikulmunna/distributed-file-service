@@ -9,6 +9,7 @@ import time
 from datetime import datetime, timezone
 
 import httpx
+import pytest
 from db_hooks import before_statement
 from fastapi.testclient import TestClient
 from sqlalchemy import update
@@ -273,3 +274,83 @@ def test_storage_object_exists_local() -> None:
     assert storage.object_exists(key) is True
     assert storage.object_exists("uploads/missing/chunk_0") is False
 
+
+
+# ---------------------------------------------------------------- multipart: one write per chunk
+
+
+def _b64_sha256(data: bytes) -> str:
+    import base64
+
+    return base64.b64encode(hashlib.sha256(data).digest()).decode()
+
+
+def test_complete_sends_part_checksums(client, auth_headers, monkeypatch) -> None:
+    upload_id = _ready_multipart_upload(client, auth_headers, monkeypatch)
+    seen: list[list[dict]] = []
+    monkeypatch.setattr(settings, "s3_part_checksums", True, raising=False)
+    monkeypatch.setattr(storage, "complete_upload", lambda **kwargs: seen.append(kwargs["parts"]))
+
+    assert client.post(f"/v1/uploads/{upload_id}/complete", headers=auth_headers).status_code == 200
+    assert seen == [
+        [
+            {"PartNumber": 1, "ETag": '"etag"', "ChecksumSHA256": _b64_sha256(b"aaaaa")},
+            {"PartNumber": 2, "ETag": '"etag"', "ChecksumSHA256": _b64_sha256(b"bbbbb")},
+        ]
+    ]
+
+
+def _multipart_with_file_checksum(client, headers, monkeypatch, assembled: bytes) -> tuple[str, list[str]]:
+    data = b"aaaaabbbbb"
+    upload_id = _new_upload(client, headers, 10, 5, file_checksum_sha256=hashlib.sha256(data).hexdigest())
+    _upload_chunks(client, headers, upload_id, data, 5)
+    _as_multipart(upload_id, monkeypatch)
+    read_keys: list[str] = []
+    monkeypatch.setattr(storage, "complete_upload", lambda **kwargs: None)
+
+    def iter_assembled(key: str, block_size: int = 8 * 1024 * 1024):
+        read_keys.append(key)
+        yield assembled
+
+    monkeypatch.setattr(storage, "iter_object", iter_assembled)
+    return upload_id, read_keys
+
+
+def test_multipart_checksum_verified_on_the_assembled_object(client, auth_headers, monkeypatch) -> None:
+    upload_id, read_keys = _multipart_with_file_checksum(client, auth_headers, monkeypatch, assembled=b"aaaaabbbbb")
+    response = client.post(f"/v1/uploads/{upload_id}/complete", headers=auth_headers)
+    assert response.status_code == 200, response.text
+    assert read_keys == [f"uploads/{upload_id}/assembled"]
+    assert _status(upload_id) == "COMPLETED"
+
+
+def test_multipart_checksum_mismatch_after_assembly_fails_the_upload(client, auth_headers, monkeypatch) -> None:
+    upload_id, _ = _multipart_with_file_checksum(client, auth_headers, monkeypatch, assembled=b"tampered!!")
+    response = client.post(f"/v1/uploads/{upload_id}/complete", headers=auth_headers)
+    assert response.status_code == 409
+    assert response.json()["detail"] == "file checksum mismatch"
+    with SessionLocal() as db:
+        upload = db.get(Upload, upload_id)
+        assert upload.status == "FAILED"  # the parts are consumed, so re-uploading cannot fix it
+        assert upload.failure_reason.startswith("file checksum mismatch: expected ")
+
+
+def test_multipart_download_streams_the_assembled_object(client, auth_headers, monkeypatch) -> None:
+    upload_id = _ready_multipart_upload(client, auth_headers, monkeypatch)
+    monkeypatch.setattr(storage, "complete_upload", lambda **kwargs: None)
+    assert client.post(f"/v1/uploads/{upload_id}/complete", headers=auth_headers).status_code == 200
+    read_keys: list[str] = []
+
+    def iter_assembled(key: str, block_size: int = 8 * 1024 * 1024):
+        read_keys.append(key)
+        yield b"aaaaa"
+        yield b"bbbbb"
+
+    monkeypatch.setattr(storage, "iter_object", iter_assembled)
+    monkeypatch.setattr(storage, "read_chunk", lambda key: pytest.fail(f"read a per-chunk object {key}"))
+
+    full = client.get(f"/v1/uploads/{upload_id}/download", headers=auth_headers)
+    assert full.status_code == 200 and full.content == b"aaaaabbbbb"
+    partial = client.get(f"/v1/uploads/{upload_id}/download", headers={**auth_headers, "Range": "bytes=3-6"})
+    assert partial.status_code == 206 and partial.content == b"aabb"
+    assert read_keys == [f"uploads/{upload_id}/assembled"] * 2

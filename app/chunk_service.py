@@ -119,17 +119,19 @@ def prepare_chunk(
 
 
 def write_to_storage(
-    upload_id: str, chunk_index: int, data: bytes, multipart_upload_id: str | None
+    upload_id: str, chunk_index: int, data: bytes, multipart_upload_id: str | None, sha256_hex: str | None = None
 ) -> StorageWriteResult:
     start = time.perf_counter()
-    result = storage.write_chunk(upload_id, chunk_index, data, multipart_upload_id=multipart_upload_id)
+    result = storage.write_chunk(
+        upload_id, chunk_index, data, multipart_upload_id=multipart_upload_id, sha256_hex=sha256_hex
+    )
     s3_put_latency_seconds.observe(time.perf_counter() - start)
     return result
 
 
 def persist_chunk(plan: ChunkPlan, body: bytes) -> StorageWriteResult:
     """Storage write only; no DB session is open here."""
-    return write_to_storage(plan.upload_id, plan.chunk_index, body, plan.multipart_upload_id)
+    return write_to_storage(plan.upload_id, plan.chunk_index, body, plan.multipart_upload_id, sha256_hex=plan.sha256)
 
 
 def persist_chunk_via_queue(plan: ChunkPlan, body: bytes) -> StorageWriteResult:

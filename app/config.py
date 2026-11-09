@@ -15,6 +15,11 @@ class Settings(BaseSettings):
     storage_root: str = "./data"
     s3_bucket: str = ""
     s3_endpoint_url: str = ""
+    # S3 verifies each part's SHA-256 on receipt. Turn off only for a provider that rejects checksum
+    # headers (botocore may then still send its default CRC32; set AWS_REQUEST_CHECKSUM_CALCULATION=when_required).
+    s3_part_checksums: bool = True
+    s3_sse: str = ""  # "AES256" or "aws:kms"; empty uses the bucket default
+    s3_sse_kms_key_id: str = ""
     aws_region: str = "us-east-1"
     r2_bucket: str = ""
     r2_account_id: str = ""

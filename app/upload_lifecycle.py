@@ -13,6 +13,7 @@ already assembled object as success.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 from dataclasses import dataclass, field
 from datetime import timedelta
@@ -125,10 +126,30 @@ def claim_completion(
             file_checksum_sha256=upload.file_checksum_sha256,
             multipart_upload_id=multipart_upload_id,
             chunk_keys=[chunk.s3_key for chunk in chunks],
-            parts=[{"PartNumber": chunk.chunk_index + 1, "ETag": chunk.s3_etag} for chunk in chunks],
+            parts=[_part(chunk) for chunk in chunks],
         )
         db.commit()  # nothing below touches ORM objects, so no connection is reopened
     return work
+
+
+def _part(chunk: Chunk) -> dict:
+    part = {"PartNumber": chunk.chunk_index + 1, "ETag": chunk.s3_etag}
+    if settings.s3_part_checksums and chunk.chunk_checksum_sha256:
+        part["ChecksumSHA256"] = base64.b64encode(bytes.fromhex(chunk.chunk_checksum_sha256)).decode("ascii")
+    return part
+
+
+def _sha256_of_object(key: str) -> str:
+    digest = hashlib.sha256()
+    for block in storage.iter_object(key):
+        digest.update(block)
+    return digest.hexdigest()
+
+
+def _fail_upload(upload_id: str, reason: str) -> None:
+    with SessionLocal() as db:
+        transition(db, upload_id, {UploadStatus.completing}, UploadStatus.failed, failure_reason=reason)
+        db.commit()
 
 
 def _assembled(upload_id: str) -> bool:
@@ -139,8 +160,13 @@ def _assembled(upload_id: str) -> bool:
 
 
 def run_storage_work(work: CompletionWork) -> None:
-    """Verify the whole-file checksum and complete the multipart upload. No DB connection is held."""
-    if work.file_checksum_sha256:
+    """Verify the whole-file checksum and complete the multipart upload. No DB connection is held.
+
+    Plain chunk objects are verified before completing, so a mismatch leaves the upload fixable. Multipart
+    parts cannot be read back until S3 assembles them, so they are verified on the assembled object; a
+    mismatch then marks the upload FAILED (its parts are consumed).
+    """
+    if work.file_checksum_sha256 and not work.multipart_upload_id:
         digest = hashlib.sha256()
         for key in work.chunk_keys:
             digest.update(with_storage_retries(lambda key=key: storage.read_chunk(key), "checksum verification"))
@@ -160,6 +186,14 @@ def run_storage_work(work: CompletionWork) -> None:
             # whether the assembled object exists, not by the error code.
             if not _assembled(work.upload_id):
                 raise
+        if work.file_checksum_sha256:
+            key = storage.assembled_key(work.upload_id)
+            actual = with_storage_retries(lambda: _sha256_of_object(key), "checksum verification")
+            if actual != work.file_checksum_sha256:
+                _fail_upload(
+                    work.upload_id, f"file checksum mismatch: expected {work.file_checksum_sha256}, got {actual}"
+                )
+                raise HTTPException(status_code=409, detail="file checksum mismatch")
 
 
 def release_claim(upload_id: str) -> None:

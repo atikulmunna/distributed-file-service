@@ -76,3 +76,47 @@ jobs:
 
       - name: Run tests on Postgres
         run: pytest -q
+
+  s3-compat:
+    # Integration tests against a real S3-compatible server (Versity Gateway; MinIO images are no
+    # longer publicly pullable). Started with docker run because service containers cannot pass
+    # the backend arguments this image needs.
+    runs-on: ubuntu-latest
+    env:
+      RUN_S3_INTEGRATION: "1"
+      S3_INTEGRATION_ENDPOINT_URL: http://localhost:7070
+      S3_INTEGRATION_BUCKET: dfs-it
+      AWS_ACCESS_KEY_ID: ci-access-key
+      AWS_SECRET_ACCESS_KEY: ci-secret-key-not-a-real-secret
+      AWS_REGION: us-east-1
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements*.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Start Versity Gateway
+        run: |
+          docker run -d --name s3 -p 7070:7070 \
+            -e ROOT_ACCESS_KEY="$AWS_ACCESS_KEY_ID" -e ROOT_SECRET_KEY="$AWS_SECRET_ACCESS_KEY" \
+            -e VGW_BACKEND=posix -e VGW_BACKEND_ARG=/data -v s3data:/data \
+            versity/versitygw:v1.10.0
+          for i in $(seq 1 30); do
+            if curl -s -o /dev/null http://localhost:7070; then exit 0; fi
+            sleep 1
+          done
+          docker logs s3
+          exit 1
+
+      - name: Run S3 integration tests
+        run: pytest -q tests/test_s3_integration_optional.py

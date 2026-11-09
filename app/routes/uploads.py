@@ -423,6 +423,18 @@ def _parse_range(range_header: str, file_size: int) -> tuple[int, int]:
     return start, end
 
 
+def _stream_object_range(key: str, start: int, end: int) -> Iterator[bytes]:
+    """Yield bytes start..end (inclusive) of one stored object. Task 11 replaces this with ranged reads."""
+    cursor = 0
+    for block in storage.iter_object(key):
+        next_cursor = cursor + len(block)
+        if next_cursor > start and cursor <= end:
+            yield block[max(0, start - cursor) : min(len(block), end - cursor + 1)]
+        if next_cursor > end:
+            break
+        cursor = next_cursor
+
+
 def _stream_bytes_for_range(chunks: list[Chunk], start: int, end: int) -> Iterator[bytes]:
     cursor = 0
     for chunk in chunks:
@@ -482,18 +494,23 @@ def download(
             "range_requested": bool(range),
         }
     )
+    if upload.multipart_upload_id and settings.storage_backend.lower() in ("s3", "r2"):
+        assembled_key = storage.assembled_key(upload.id)
+        stream = lambda start, end: _stream_object_range(assembled_key, start, end)  # noqa: E731
+    else:
+        stream = lambda start, end: _stream_bytes_for_range(chunks, start, end)  # noqa: E731
     if range:
         start, end = _parse_range(range, upload.file_size)
         headers["Content-Range"] = f"bytes {start}-{end}/{upload.file_size}"
         return StreamingResponse(
-            _stream_bytes_for_range(chunks, start, end),
+            stream(start, end),
             status_code=206,
             media_type="application/octet-stream",
             headers=headers,
         )
 
     return StreamingResponse(
-        _stream_bytes_for_range(chunks, 0, upload.file_size - 1),
+        stream(0, upload.file_size - 1),
         media_type="application/octet-stream",
         headers=headers,
     )

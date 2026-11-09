@@ -1,8 +1,10 @@
-from pathlib import Path
+import base64
+import hashlib
+from collections.abc import Iterator
 from dataclasses import dataclass
+from pathlib import Path
 
 from app.config import settings
-
 
 # Errors worth retrying: throttling, server-side 5xx, timeouts, and connection failures. These are
 # the cases botocore's standard retry mode retries; everything else (including local OSError such as a
@@ -28,8 +30,13 @@ TRANSIENT_HTTP_STATUSES = {500, 502, 503, 504}
 
 
 def is_transient_storage_error(exc: Exception) -> bool:
-    from botocore.exceptions import ClientError, ConnectionClosedError, ConnectionError, EndpointConnectionError
-    from botocore.exceptions import ReadTimeoutError
+    from botocore.exceptions import (
+        ClientError,
+        ConnectionClosedError,
+        ConnectionError,
+        EndpointConnectionError,
+        ReadTimeoutError,
+    )
 
     if isinstance(exc, ClientError):
         code = exc.response.get("Error", {}).get("Code", "")
@@ -57,8 +64,14 @@ class ChunkStorage:
         raise NotImplementedError
 
     def write_chunk(
-        self, upload_id: str, chunk_index: int, data: bytes, multipart_upload_id: str | None = None
+        self,
+        upload_id: str,
+        chunk_index: int,
+        data: bytes,
+        multipart_upload_id: str | None = None,
+        sha256_hex: str | None = None,
     ) -> StorageWriteResult:
+        """Store one chunk. `sha256_hex` (already computed by the caller) lets the backend verify it."""
         raise NotImplementedError
 
     def complete_upload(self, upload_id: str, multipart_upload_id: str | None, parts: list[dict]) -> None:
@@ -69,6 +82,10 @@ class ChunkStorage:
         return None
 
     def object_exists(self, key: str) -> bool:
+        raise NotImplementedError
+
+    def iter_object(self, key: str, block_size: int = 8 * 1024 * 1024) -> Iterator[bytes]:
+        """Stream an object in blocks without loading it whole."""
         raise NotImplementedError
 
     def read_chunk(self, s3_key: str) -> bytes:
@@ -90,7 +107,12 @@ class LocalChunkStorage(ChunkStorage):
         return f"uploads/{upload_id}/chunk_{chunk_index}"
 
     def write_chunk(
-        self, upload_id: str, chunk_index: int, data: bytes, multipart_upload_id: str | None = None
+        self,
+        upload_id: str,
+        chunk_index: int,
+        data: bytes,
+        multipart_upload_id: str | None = None,
+        sha256_hex: str | None = None,
     ) -> StorageWriteResult:
         relative_key = self.chunk_key(upload_id, chunk_index)
         full_path = self.root / relative_key
@@ -103,6 +125,11 @@ class LocalChunkStorage(ChunkStorage):
 
     def object_exists(self, key: str) -> bool:
         return (self.root / key).is_file()
+
+    def iter_object(self, key: str, block_size: int = 8 * 1024 * 1024) -> Iterator[bytes]:
+        with (self.root / key).open("rb") as handle:
+            while block := handle.read(block_size):
+                yield block
 
     def list_keys(self, prefix: str = "") -> list[str]:
         base = self.root / prefix if prefix else self.root
@@ -154,19 +181,42 @@ class S3ChunkStorage(ChunkStorage):
     def chunk_key(self, upload_id: str, chunk_index: int) -> str:
         return f"uploads/{upload_id}/chunk_{chunk_index}"
 
+    def _checksum_params(self, data: bytes, sha256_hex: str | None) -> dict:
+        if not settings.s3_part_checksums:
+            return {}
+        digest = bytes.fromhex(sha256_hex) if sha256_hex else hashlib.sha256(data).digest()
+        return {"ChecksumAlgorithm": "SHA256", "ChecksumSHA256": base64.b64encode(digest).decode("ascii")}
+
+    def _sse_params(self) -> dict:
+        if not settings.s3_sse:
+            return {}
+        params = {"ServerSideEncryption": settings.s3_sse}
+        if settings.s3_sse == "aws:kms" and settings.s3_sse_kms_key_id:
+            params["SSEKMSKeyId"] = settings.s3_sse_kms_key_id
+        return params
+
     def initialize_upload(self, upload_id: str) -> str | None:
         key = self.assembled_key(upload_id)
-        result = self.client.create_multipart_upload(Bucket=self.bucket, Key=key)
+        params = {"ChecksumAlgorithm": "SHA256"} if settings.s3_part_checksums else {}
+        result = self.client.create_multipart_upload(Bucket=self.bucket, Key=key, **params, **self._sse_params())
         return result["UploadId"]
 
     def write_chunk(
-        self, upload_id: str, chunk_index: int, data: bytes, multipart_upload_id: str | None = None
+        self,
+        upload_id: str,
+        chunk_index: int,
+        data: bytes,
+        multipart_upload_id: str | None = None,
+        sha256_hex: str | None = None,
     ) -> StorageWriteResult:
-        key = self.chunk_key(upload_id, chunk_index)
-        if not multipart_upload_id:
-            put_result = self.client.put_object(Bucket=self.bucket, Key=key, Body=data)
+        checksum = self._checksum_params(data, sha256_hex)
+        if not multipart_upload_id:  # a one-chunk upload is a plain object
+            key = self.chunk_key(upload_id, chunk_index)
+            put_result = self.client.put_object(Bucket=self.bucket, Key=key, Body=data, **checksum, **self._sse_params())
             return StorageWriteResult(key=key, etag=put_result.get("ETag"))
 
+        # One write per chunk: the part only. It has no object of its own; the chunk's key is the
+        # assembled object it becomes part of, and its part number is chunk_index + 1.
         assembled_key = self.assembled_key(upload_id)
         result = self.client.upload_part(
             Bucket=self.bucket,
@@ -174,9 +224,9 @@ class S3ChunkStorage(ChunkStorage):
             PartNumber=chunk_index + 1,
             UploadId=multipart_upload_id,
             Body=data,
+            **checksum,
         )
-        self.client.put_object(Bucket=self.bucket, Key=key, Body=data)
-        return StorageWriteResult(key=key, etag=result.get("ETag"))
+        return StorageWriteResult(key=assembled_key, etag=result.get("ETag"))
 
     def complete_upload(self, upload_id: str, multipart_upload_id: str | None, parts: list[dict]) -> None:
         if not multipart_upload_id:
@@ -216,6 +266,10 @@ class S3ChunkStorage(ChunkStorage):
     def read_chunk(self, s3_key: str) -> bytes:
         obj = self.client.get_object(Bucket=self.bucket, Key=s3_key)
         return obj["Body"].read()
+
+    def iter_object(self, key: str, block_size: int = 8 * 1024 * 1024) -> Iterator[bytes]:
+        body = self.client.get_object(Bucket=self.bucket, Key=key)["Body"]
+        yield from body.iter_chunks(chunk_size=block_size)
 
     def list_keys(self, prefix: str = "") -> list[str]:
         keys: list[str] = []
