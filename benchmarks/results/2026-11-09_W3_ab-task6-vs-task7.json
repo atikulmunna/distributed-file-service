@@ -1,0 +1,117 @@
+{
+  "description": "Interleaved A/B of W3 (8 concurrent chunk records on one upload row, the case the new row lock serializes): Task 6 vs Task 7 code.",
+  "method": "interleaved rounds; odd rounds run prev first, even rounds run new first",
+  "server_code": {
+    "prev": "147c86c",
+    "new": "4b3abf0"
+  },
+  "runs": {
+    "prev": [
+      {
+        "round": 1,
+        "timestamp_utc": "2026-11-09T12:35:01+00:00",
+        "uploads_ok": 1,
+        "uploads_total": 1,
+        "upload_mib_per_s": 42.407,
+        "chunk_p50_ms": 887.074,
+        "errors_by_status": {},
+        "download_mib_per_s": 156.103,
+        "verified_downloads": 1
+      },
+      {
+        "round": 2,
+        "timestamp_utc": "2026-11-09T12:36:43+00:00",
+        "uploads_ok": 1,
+        "uploads_total": 1,
+        "upload_mib_per_s": 38.784,
+        "chunk_p50_ms": 885.349,
+        "errors_by_status": {},
+        "download_mib_per_s": 163.084,
+        "verified_downloads": 1
+      },
+      {
+        "round": 3,
+        "timestamp_utc": "2026-11-09T12:37:18+00:00",
+        "uploads_ok": 1,
+        "uploads_total": 1,
+        "upload_mib_per_s": 40.325,
+        "chunk_p50_ms": 765.769,
+        "errors_by_status": {},
+        "download_mib_per_s": 159.004,
+        "verified_downloads": 1
+      },
+      {
+        "round": 4,
+        "timestamp_utc": "2026-11-09T12:38:49+00:00",
+        "uploads_ok": 1,
+        "uploads_total": 1,
+        "upload_mib_per_s": 61.804,
+        "chunk_p50_ms": 724.148,
+        "errors_by_status": {},
+        "download_mib_per_s": 161.162,
+        "verified_downloads": 1
+      }
+    ],
+    "new": [
+      {
+        "round": 1,
+        "timestamp_utc": "2026-11-09T12:35:35+00:00",
+        "uploads_ok": 1,
+        "uploads_total": 1,
+        "upload_mib_per_s": 42.916,
+        "chunk_p50_ms": 909.097,
+        "errors_by_status": {},
+        "download_mib_per_s": 157.649,
+        "verified_downloads": 1
+      },
+      {
+        "round": 2,
+        "timestamp_utc": "2026-11-09T12:36:08+00:00",
+        "uploads_ok": 1,
+        "uploads_total": 1,
+        "upload_mib_per_s": 39.527,
+        "chunk_p50_ms": 1074.222,
+        "errors_by_status": {},
+        "download_mib_per_s": 157.878,
+        "verified_downloads": 1
+      },
+      {
+        "round": 3,
+        "timestamp_utc": "2026-11-09T12:37:53+00:00",
+        "uploads_ok": 1,
+        "uploads_total": 1,
+        "upload_mib_per_s": 40.497,
+        "chunk_p50_ms": 833.862,
+        "errors_by_status": {},
+        "download_mib_per_s": 161.12,
+        "verified_downloads": 1
+      },
+      {
+        "round": 4,
+        "timestamp_utc": "2026-11-09T12:38:27+00:00",
+        "uploads_ok": 1,
+        "uploads_total": 1,
+        "upload_mib_per_s": 76.978,
+        "chunk_p50_ms": 716.929,
+        "errors_by_status": {},
+        "download_mib_per_s": 161.367,
+        "verified_downloads": 1
+      }
+    ]
+  },
+  "median": {
+    "prev": {
+      "uploads_ok": 1.0,
+      "upload_mib_per_s": 41.366,
+      "chunk_p50_ms": 825.559,
+      "download_mib_per_s": 160.083
+    },
+    "new": {
+      "uploads_ok": 1.0,
+      "upload_mib_per_s": 41.7065,
+      "chunk_p50_ms": 871.4794999999999,
+      "download_mib_per_s": 159.499
+    }
+  },
+  "interpretation": "No regression from the upload-row lock: upload throughput paired differences +0.5, +0.7, +0.2, +15.2 MiB/s; download flat; chunk p50 up by tens of ms in 3 of 4 rounds. All uploads and downloads verified."
+}
