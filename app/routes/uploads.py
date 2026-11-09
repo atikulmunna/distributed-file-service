@@ -3,7 +3,6 @@
 import asyncio
 import hashlib
 import json
-import math
 import uuid
 from collections.abc import Iterator
 
@@ -12,9 +11,11 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
+from starlette.requests import ClientDisconnect
 
 from app.auth import AuthUser, require_api_user
 from app.chunk_service import (
+    admit_chunk,
     persist_chunk,
     persist_chunk_via_queue,
     prepare_chunk,
@@ -23,6 +24,7 @@ from app.chunk_service import (
 )
 from app.config import settings
 from app.db import get_db
+from app.layout import ChunkLayout
 from app.limits import PerUploadInflightLimiter
 from app.logging_utils import audit_event, request_id_of
 from app.metrics import (
@@ -62,6 +64,37 @@ upload_limiter = PerUploadInflightLimiter(settings.max_inflight_chunks_per_uploa
 MIN_MULTIPART_PART_SIZE = 5 * 1024 * 1024
 
 
+S3_SMALL_PART_REASON = (
+    "chunk_size must be at least 5 MiB (5242880 bytes) when an upload has more than one chunk on the s3 backend"
+)
+
+
+def _validated_layout(file_size: int, chunk_size: int) -> ChunkLayout:
+    """Apply the configured input bounds. Raises 400 with the reason a client can act on."""
+    if file_size > settings.max_file_size_bytes:
+        raise HTTPException(
+            status_code=400, detail=f"file_size {file_size} exceeds the maximum of {settings.max_file_size_bytes} bytes"
+        )
+    if not settings.min_chunk_size_bytes <= chunk_size <= settings.max_chunk_size_bytes:
+        raise HTTPException(
+            status_code=400,
+            detail=f"chunk_size must be between {settings.min_chunk_size_bytes} and {settings.max_chunk_size_bytes} bytes",
+        )
+    layout = ChunkLayout(file_size, chunk_size)
+    if layout.total_chunks > settings.max_total_chunks:
+        raise HTTPException(
+            status_code=400,
+            detail=f"file needs {layout.total_chunks} chunks; the maximum is {settings.max_total_chunks}, use a larger chunk_size",
+        )
+    if (
+        settings.storage_backend.lower() in ("s3", "r2")
+        and layout.total_chunks > 1
+        and chunk_size < MIN_MULTIPART_PART_SIZE
+    ):
+        raise HTTPException(status_code=400, detail=S3_SMALL_PART_REASON)
+    return layout
+
+
 def _fingerprint(obj: dict) -> str:
     return hashlib.sha256(json.dumps(obj, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 
@@ -80,6 +113,7 @@ def init_upload(
     db: Session = Depends(get_db),
 ) -> InitUploadResponse:
     chunk_size = payload.chunk_size or settings.chunk_size_bytes
+    layout = _validated_layout(payload.file_size, chunk_size)
     request_fingerprint = _fingerprint(
         {
             "file_name": payload.file_name,
@@ -107,7 +141,7 @@ def init_upload(
     # End the read transaction so no DB connection is held during the storage call below.
     db.rollback()
 
-    total_chunks = math.ceil(payload.file_size / chunk_size)
+    total_chunks = layout.total_chunks
     upload_id = str(uuid.uuid4())
     multipart_upload_id = None
     use_multipart = (
@@ -168,29 +202,62 @@ def init_upload(
     )
 
 
+async def _read_chunk_body(request: Request, size: int, timeout_s: float) -> bytes:
+    """Read exactly `size` bytes within `timeout_s`. Nothing is stored and no slot is held while reading."""
+    buffer = bytearray()
+
+    async def read_all() -> None:
+        async for piece in request.stream():
+            buffer.extend(piece)
+            if len(buffer) > size:
+                raise HTTPException(status_code=400, detail=f"chunk body is longer than its Content-Length of {size} bytes")
+
+    try:
+        await asyncio.wait_for(read_all(), timeout=timeout_s)
+    except TimeoutError as exc:
+        raise HTTPException(status_code=408, detail=f"chunk body not received within {timeout_s} s") from exc
+    except ClientDisconnect as exc:
+        raise HTTPException(status_code=499, detail="client disconnected before sending the whole chunk") from exc
+    if len(buffer) != size:
+        raise HTTPException(
+            status_code=400, detail=f"chunk body is {len(buffer)} bytes, shorter than its Content-Length of {size}"
+        )
+    return bytes(buffer)
+
+
 @router.put(
     "/v1/uploads/{upload_id}/chunks/{chunk_index}",
     response_model=UploadChunkResponse,
     status_code=202,
     responses={
         **COMMON_ERROR_RESPONSES,
-        400: {"model": ErrorResponse, "description": "Validation error"},
+        400: {"model": ErrorResponse, "description": "Validation error, including a size that does not match the layout"},
         404: {"model": ErrorResponse, "description": "Upload not found"},
+        408: {"model": ErrorResponse, "description": "Chunk body not received in time"},
         409: {"model": ErrorResponse, "description": "State/idempotency conflict"},
+        411: {"model": ErrorResponse, "description": "Content-Length header missing"},
     },
 )
 async def upload_chunk(
     upload_id: str,
     chunk_index: int,
     request: Request,
-    content_length: int = Header(default=0),
+    content_length: int | None = Header(default=None),
     chunk_sha256: str | None = Header(default=None, alias="X-Chunk-SHA256"),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     user: AuthUser = Depends(require_api_user),
 ) -> UploadChunkResponse:
     # Only awaits happen on the event loop. Validation (with hashing), the storage write, and
     # the DB write each run on worker threads, and no DB connection is held between them.
-    body = await request.body()
+    if content_length is None:
+        raise HTTPException(status_code=411, detail="Content-Length header is required")
+    expected_size = await run_in_threadpool(admit_chunk, upload_id, chunk_index, user)
+    if content_length != expected_size:
+        raise HTTPException(
+            status_code=400,
+            detail=f"chunk {chunk_index} has Content-Length {content_length}, expected {expected_size} bytes",
+        )
+    body = await _read_chunk_body(request, expected_size, settings.chunk_body_timeout_seconds)
     prepared = await run_in_threadpool(
         prepare_chunk, upload_id, chunk_index, body, chunk_sha256, idempotency_key, user, declared_length=content_length
     )
@@ -291,6 +358,11 @@ def complete_upload(
         raise HTTPException(status_code=409, detail="cannot complete upload, missing chunks")
 
     uploaded_chunks = list(db.scalars(select(Chunk).where(Chunk.upload_id == upload_id).order_by(Chunk.chunk_index)).all())
+    stored_bytes = sum(chunk.size_bytes for chunk in uploaded_chunks)
+    if stored_bytes != upload.file_size:
+        raise HTTPException(
+            status_code=409, detail=f"chunk sizes add up to {stored_bytes} bytes, expected {upload.file_size}"
+        )
     if upload.file_checksum_sha256:
         full_file_hash = hashlib.sha256()
         for chunk in uploaded_chunks:

@@ -34,6 +34,12 @@ class Settings(BaseSettings):
     otlp_endpoint: str = "localhost:4317"
     otlp_insecure: bool = True
     chunk_size_bytes: int = 5 * 1024 * 1024
+    # Input bounds. 5 GiB covers the spec's 5 GB files; 10,000 is S3's multipart part limit.
+    max_file_size_bytes: int = 5 * 1024**3
+    min_chunk_size_bytes: int = 1
+    max_chunk_size_bytes: int = 64 * 1024**2
+    max_total_chunks: int = 10_000
+    chunk_body_timeout_seconds: int = 60
     max_retries: int = 3
     max_inflight_chunks_per_upload: int = 8
     max_fair_inflight_chunks_per_upload: int = 0

@@ -6,14 +6,21 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from app.chunk_service import (
+    chunk_result_store,
+    durable_queue,
+    use_external_durable_queue,
+    write_to_storage,
+)
 from app.config import settings
 from app.db import SessionLocal
 from app.logging_utils import current_trace_id, log_event, request_id_of
 from app.maintenance import cleanup_once
 from app.metrics import http_request_duration_seconds
-from app.chunk_service import chunk_result_store, durable_queue, use_external_durable_queue, write_to_storage
 from app.routes import console, ops, uploads
-from app.routes.uploads import upload_limiter  # noqa: F401  (re-exported: tests and tools import it from app.main)
+from app.routes.uploads import (
+    upload_limiter,  # noqa: F401  (re-exported: tests and tools import it from app.main)
+)
 from app.tracing import setup_tracing
 from app.worker import executor
 
@@ -146,9 +153,12 @@ def _error_code_for_status(status_code: int) -> str:
         401: "missing_api_key",
         403: "forbidden",
         404: "not_found",
+        408: "request_timeout",
         409: "conflict",
+        411: "length_required",
         416: "range_not_satisfiable",
         429: "throttled",
+        499: "client_closed_request",
         500: "internal_error",
     }
     return mapping.get(status_code, f"http_{status_code}")

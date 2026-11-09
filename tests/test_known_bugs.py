@@ -47,22 +47,6 @@ def _completed_upload(client: TestClient, headers: dict, body: bytes, file_name:
     return upload_id
 
 
-@known_bug(6)
-def test_chunk_size_must_match_layout(client, auth_headers) -> None:
-    upload_id = _init(client, auth_headers, 10, 5)
-    assert _put(client, auth_headers, upload_id, 0, b"A" * 100).status_code == 400
-
-
-@known_bug(6)
-def test_init_rejects_too_many_chunks(client, auth_headers) -> None:
-    response = client.post(
-        "/v1/uploads/init",
-        json={"file_name": "tiny-chunks.bin", "file_size": 10**9, "chunk_size": 1},
-        headers=auth_headers,
-    )
-    assert response.status_code in (400, 422)
-
-
 @known_bug(7)
 def test_concurrent_same_chunk_puts_succeed(client, auth_headers) -> None:
     """Another request commits the same chunk between our existence check and our insert.

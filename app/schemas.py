@@ -1,11 +1,20 @@
-from pydantic import BaseModel, Field
+import unicodedata
+
+from pydantic import BaseModel, Field, field_validator
 
 
 class InitUploadRequest(BaseModel):
-    file_name: str = Field(min_length=1)
-    file_size: int = Field(gt=0)
+    file_name: str = Field(min_length=1, max_length=255)
+    file_size: int = Field(ge=0)  # 0 is an empty file with no chunks
     chunk_size: int | None = Field(default=None, gt=0)
     file_checksum_sha256: str | None = Field(default=None, pattern=r"^[0-9a-fA-F]{64}$")
+
+    @field_validator("file_name")
+    @classmethod
+    def _no_control_characters(cls, value: str) -> str:
+        if any(unicodedata.category(ch) == "Cc" for ch in value):
+            raise ValueError("file_name must not contain control characters")
+        return value
 
 
 class InitUploadResponse(BaseModel):

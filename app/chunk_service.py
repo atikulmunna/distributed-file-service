@@ -18,7 +18,13 @@ from app.auth import AuthUser
 from app.config import settings
 from app.db import SessionLocal
 from app.durable_queue import ChunkResultStore, ChunkWriteTask, build_durable_queue
-from app.metrics import bytes_uploaded_total, chunks_uploaded_total, db_update_latency_seconds, s3_put_latency_seconds
+from app.layout import ChunkLayout
+from app.metrics import (
+    bytes_uploaded_total,
+    chunks_uploaded_total,
+    db_update_latency_seconds,
+    s3_put_latency_seconds,
+)
 from app.models import Chunk, ChunkRequestIdempotency, ChunkStatus, Upload, UploadStatus
 from app.schemas import UploadChunkResponse
 from app.storage import StorageWriteResult, storage
@@ -39,6 +45,19 @@ class ChunkPlan:
     multipart_upload_id: str | None
     size: int
     sha256: str
+
+
+def admit_chunk(upload_id: str, chunk_index: int, user: AuthUser) -> int:
+    """Check ownership, state, and index before any body is read. Returns the exact body size
+    this chunk must have under the upload's layout."""
+    with SessionLocal() as db:
+        upload = get_owned_upload(db, upload_id, user)
+        if upload.status not in (UploadStatus.in_progress.value, UploadStatus.initiated.value):
+            raise HTTPException(status_code=409, detail="upload is not accepting chunks")
+        try:
+            return ChunkLayout(upload.file_size, upload.chunk_size).expected_size(chunk_index)
+        except IndexError:
+            raise HTTPException(status_code=400, detail="chunk index out of bounds") from None
 
 
 def prepare_chunk(
