@@ -31,7 +31,7 @@ class _FakeS3Client:
 
 def test_s3_storage_multipart_flow(monkeypatch) -> None:
     fake_client = _FakeS3Client()
-    fake_boto3 = types.SimpleNamespace(client=lambda service_name, region_name=None: fake_client)
+    fake_boto3 = types.SimpleNamespace(client=lambda service_name, **kwargs: fake_client)
     monkeypatch.setitem(sys.modules, "boto3", fake_boto3)
 
     storage = S3ChunkStorage(bucket="bucket-1", region="us-east-1")
@@ -87,4 +87,4 @@ def test_build_storage_s3_without_endpoint_uses_default_addressing(monkeypatch) 
     build_storage()
 
     assert "endpoint_url" not in calls[0]
-    assert "config" not in calls[0]
+    assert calls[0]["config"].s3 is None  # default (virtual-hosted) addressing

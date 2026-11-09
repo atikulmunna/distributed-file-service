@@ -4,6 +4,41 @@ from dataclasses import dataclass
 from app.config import settings
 
 
+# Errors worth retrying: throttling, server-side 5xx, timeouts, and connection failures. These are
+# the cases botocore's standard retry mode retries; everything else (including local OSError such as a
+# full disk) is permanent and fails fast.
+TRANSIENT_ERROR_CODES = {
+    "SlowDown",
+    "RequestTimeout",
+    "RequestTimeoutException",
+    "InternalError",
+    "ServiceUnavailable",
+    "PriorRequestNotComplete",
+    "Throttling",
+    "ThrottlingException",
+    "ThrottledException",
+    "RequestThrottled",
+    "RequestThrottledException",
+    "TooManyRequestsException",
+    "RequestLimitExceeded",
+    "BandwidthLimitExceeded",
+    "ProvisionedThroughputExceededException",
+}
+TRANSIENT_HTTP_STATUSES = {500, 502, 503, 504}
+
+
+def is_transient_storage_error(exc: Exception) -> bool:
+    from botocore.exceptions import ClientError, ConnectionClosedError, ConnectionError, EndpointConnectionError
+    from botocore.exceptions import ReadTimeoutError
+
+    if isinstance(exc, ClientError):
+        code = exc.response.get("Error", {}).get("Code", "")
+        status = exc.response.get("ResponseMetadata", {}).get("HTTPStatusCode")
+        return code in TRANSIENT_ERROR_CODES or status in TRANSIENT_HTTP_STATUSES
+    # ConnectionError covers EndpointConnectionError and ConnectTimeoutError; the others are listed explicitly.
+    return isinstance(exc, (ConnectionError, EndpointConnectionError, ConnectionClosedError, ReadTimeoutError))
+
+
 @dataclass(frozen=True)
 class StorageWriteResult:
     key: str
@@ -103,10 +138,17 @@ class S3ChunkStorage(ChunkStorage):
         if access_key_id and secret_access_key:
             client_kwargs["aws_access_key_id"] = access_key_id
             client_kwargs["aws_secret_access_key"] = secret_access_key
-        if path_style:
-            from botocore.config import Config
+        from botocore.config import Config
 
-            client_kwargs["config"] = Config(s3={"addressing_style": "path"})
+        client_kwargs["config"] = Config(
+            # Every worker thread can hold a connection; boto's default pool (10) is smaller than the pool.
+            max_pool_connections=max(settings.worker_count, settings.max_workers) + 4,
+            connect_timeout=5,
+            read_timeout=60,
+            # One retry layer: the app's policy (app/storage_policy.py), so attempts do not multiply.
+            retries={"mode": "standard", "total_max_attempts": 1},
+            s3={"addressing_style": "path"} if path_style else None,
+        )
         self.client = boto3.client("s3", **client_kwargs)
 
     def chunk_key(self, upload_id: str, chunk_index: int) -> str:

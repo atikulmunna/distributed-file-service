@@ -34,6 +34,7 @@ from app.models import (
 )
 from app.schemas import CompleteUploadResponse
 from app.storage import storage
+from app.storage_policy import with_storage_retries
 from app.upload_access import get_owned_upload
 from app.upload_state import transition
 
@@ -142,18 +143,23 @@ def run_storage_work(work: CompletionWork) -> None:
     if work.file_checksum_sha256:
         digest = hashlib.sha256()
         for key in work.chunk_keys:
-            digest.update(storage.read_chunk(key))
+            digest.update(with_storage_retries(lambda key=key: storage.read_chunk(key), "checksum verification"))
         if digest.hexdigest() != work.file_checksum_sha256:
             raise HTTPException(status_code=409, detail="file checksum mismatch")
     if work.multipart_upload_id:
         try:
-            storage.complete_upload(upload_id=work.upload_id, multipart_upload_id=work.multipart_upload_id, parts=work.parts)
-        except Exception as exc:
+            with_storage_retries(
+                lambda: storage.complete_upload(
+                    upload_id=work.upload_id, multipart_upload_id=work.multipart_upload_id, parts=work.parts
+                ),
+                "multipart completion",
+            )
+        except HTTPException:
             # A previous attempt may have completed it and died before recording COMPLETED; providers
             # then report different errors (NoSuchUpload on AWS, InvalidPart elsewhere), so decide by
             # whether the assembled object exists, not by the error code.
             if not _assembled(work.upload_id):
-                raise HTTPException(status_code=500, detail=f"failed to complete multipart upload: {exc}") from exc
+                raise
 
 
 def release_claim(upload_id: str) -> None:

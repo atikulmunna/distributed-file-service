@@ -5,6 +5,7 @@ import hashlib
 import json
 import uuid
 from collections.abc import Iterator
+from functools import partial
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
@@ -49,6 +50,7 @@ from app.schemas import (
     UploadStatusResponse,
 )
 from app.storage import storage
+from app.storage_policy import with_storage_retries
 from app.upload_access import get_owned_upload
 from app.upload_lifecycle import (
     CompletionReplay,
@@ -159,10 +161,7 @@ def init_upload(
         and chunk_size >= MIN_MULTIPART_PART_SIZE
     )
     if use_multipart:
-        try:
-            multipart_upload_id = storage.initialize_upload(upload_id)
-        except Exception as exc:
-            raise HTTPException(status_code=500, detail=f"failed to initialize upload storage: {exc}") from exc
+        multipart_upload_id = with_storage_retries(lambda: storage.initialize_upload(upload_id), "upload init")
 
     upload = Upload(
         id=upload_id,
@@ -279,24 +278,27 @@ async def upload_chunk(
 
     upload_limiter.acquire(upload_id)
     try:
-        retries = 0
-        while True:
-            try:
-                if use_external_durable_queue():
-                    result = await run_in_threadpool(persist_chunk_via_queue, plan, body)
-                else:
-                    result = await asyncio.wrap_future(executor.submit(persist_chunk, plan, body))
-                break
-            except HTTPException:
-                raise
-            except Exception as exc:
-                retries += 1
-                retries_total.inc()
-                if retries > settings.max_retries:
-                    chunk_upload_failures_total.inc()
-                    raise HTTPException(status_code=500, detail=f"chunk upload failed: {exc}") from exc
+        retried: list[Exception] = []
 
-        await run_in_threadpool(record_chunk, plan, result, retries, idempotency_key)
+        def count_retry(exc: Exception) -> None:
+            retried.append(exc)
+            retries_total.inc()
+
+        # Retries (transient storage errors only, with backoff) run inside the storage worker thread.
+        if use_external_durable_queue():
+            write = partial(with_storage_retries, partial(persist_chunk_via_queue, plan, body), "chunk write", count_retry)
+            pending = run_in_threadpool(write)
+        else:
+            write = partial(with_storage_retries, partial(persist_chunk, plan, body), "chunk write", count_retry)
+            pending = asyncio.wrap_future(executor.submit(write))
+        try:
+            result = await pending
+        except HTTPException as exc:
+            if exc.status_code >= 500:
+                chunk_upload_failures_total.inc()
+            raise
+
+        await run_in_threadpool(record_chunk, plan, result, len(retried), idempotency_key)
     finally:
         upload_limiter.release(upload_id)
 

@@ -42,7 +42,9 @@ class Settings(BaseSettings):
     chunk_body_timeout_seconds: int = 60
     # A COMPLETING upload whose claim is older than this may be taken over by another complete request.
     completion_lease_seconds: int = 60
-    max_retries: int = 3
+    max_retries: int = 3  # retries after the first attempt, for transient storage errors only
+    retry_base_delay_ms: int = 100
+    retry_max_delay_ms: int = 2000
     max_inflight_chunks_per_upload: int = 8
     max_fair_inflight_chunks_per_upload: int = 0
     max_global_inflight_chunks: int = 128
