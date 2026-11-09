@@ -89,7 +89,7 @@ def test_status_endpoint(client, auth_headers) -> None:
     process(FinalizeJob(upload_id))
     body = client.get(f"/v1/uploads/{upload_id}", headers=auth_headers).json()
     assert body["status"] == "FAILED" and body["failure_reason"].startswith("file checksum mismatch")
-    assert client.get(f"/v1/uploads/{upload_id}", headers={"X-API-Key": "other-key"}).status_code in (403, 404)
+    assert client.get(f"/v1/uploads/{upload_id}", headers={"X-API-Key": "other-key"}).status_code == 404
 
 
 # ---------------------------------------------------------------- the worker

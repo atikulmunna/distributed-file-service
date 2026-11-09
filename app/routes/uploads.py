@@ -49,7 +49,7 @@ from app.schemas import (
 )
 from app.storage import storage
 from app.storage_policy import with_storage_retries
-from app.upload_access import get_owned_upload
+from app.upload_access import get_owned_upload, scoped_idempotency_key
 from app.upload_lifecycle import (
     CompletionReplay,
     begin_abort,
@@ -104,6 +104,10 @@ def _validated_layout(file_size: int, chunk_size: int) -> ChunkLayout:
     return layout
 
 
+# Chunk keys are stored as sent, in a 128-character column; longer keys are rejected with 422.
+MAX_IDEMPOTENCY_KEY_LENGTH = 128
+
+
 def _fingerprint(obj: dict) -> str:
     return hashlib.sha256(json.dumps(obj, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 
@@ -117,7 +121,7 @@ def _fingerprint(obj: dict) -> str:
 def init_upload(
     request: Request,
     payload: InitUploadRequest,
-    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key", max_length=MAX_IDEMPOTENCY_KEY_LENGTH),
     user: AuthUser = Depends(require_api_user),
     db: Session = Depends(get_db),
 ) -> InitUploadResponse:
@@ -131,15 +135,14 @@ def init_upload(
             "file_checksum_sha256": payload.file_checksum_sha256.lower() if payload.file_checksum_sha256 else None,
         }
     )
-    if idempotency_key:
-        existing_request = db.get(InitRequestIdempotency, idempotency_key)
+    stored_key = scoped_idempotency_key(user, idempotency_key) if idempotency_key else None
+    if stored_key:
+        existing_request = db.get(InitRequestIdempotency, stored_key)
         if existing_request:
             if existing_request.request_fingerprint != request_fingerprint:
                 raise HTTPException(status_code=409, detail="idempotency key reused with different init payload")
             existing_upload = db.get(Upload, existing_request.upload_id)
             if existing_upload:
-                if existing_upload.owner_id != user.user_id:
-                    raise HTTPException(status_code=403, detail="idempotency key belongs to a different owner")
                 return InitUploadResponse(
                     upload_id=existing_upload.id,
                     chunk_size=existing_upload.chunk_size,
@@ -174,10 +177,10 @@ def init_upload(
     )
     db.add(upload)
     db.flush()
-    if idempotency_key:
+    if stored_key:
         db.add(
             InitRequestIdempotency(
-                idempotency_key=idempotency_key,
+                idempotency_key=stored_key,
                 upload_id=upload_id,
                 request_fingerprint=request_fingerprint,
             )
@@ -253,7 +256,7 @@ async def upload_chunk(
     request: Request,
     content_length: int | None = Header(default=None),
     chunk_sha256: str | None = Header(default=None, alias="X-Chunk-SHA256"),
-    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key", max_length=MAX_IDEMPOTENCY_KEY_LENGTH),
     user: AuthUser = Depends(require_api_user),
 ) -> UploadChunkResponse:
     # Only awaits happen on the event loop. Validation (with hashing), the storage write, and
@@ -313,11 +316,12 @@ def complete_upload(
     request: Request,
     response: Response,
     upload_id: str,
-    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key", max_length=MAX_IDEMPOTENCY_KEY_LENGTH),
     user: AuthUser = Depends(require_api_user),
 ) -> CompleteUploadResponse:
     fingerprint = _fingerprint({"upload_id": upload_id})
-    claimed = claim_completion(upload_id, user, idempotency_key, fingerprint)
+    stored_key = scoped_idempotency_key(user, idempotency_key) if idempotency_key else None
+    claimed = claim_completion(upload_id, user, stored_key, fingerprint)
     if isinstance(claimed, CompletionReplay):
         if claimed.already_completed:
             audit_event(
@@ -340,7 +344,7 @@ def complete_upload(
     except Exception:
         release_claim(upload_id)  # storage did not finish: let the client fix the problem and retry
         raise
-    status = finish_completion(upload_id, idempotency_key, fingerprint, verify=bool(claimed.file_checksum_sha256))
+    status = finish_completion(upload_id, stored_key, fingerprint, verify=bool(claimed.file_checksum_sha256))
     if status == UploadStatus.verifying.value:
         response.status_code = 202  # accepted: the whole-file checksum is being verified
     audit_event(

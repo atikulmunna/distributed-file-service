@@ -1,9 +1,9 @@
 """Operational endpoints: health, version, metrics, admin maintenance."""
 
-from fastapi import APIRouter, Depends, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Response
 from sqlalchemy import text
 
-from app.auth import AuthUser, require_admin_user
+from app.auth import AuthUser, require_admin_user, secret_matches
 from app.config import settings
 from app.db import engine
 from app.jobs import job_queue
@@ -11,6 +11,7 @@ from app.logging_utils import INSTANCE_ID
 from app.maintenance import cleanup_once
 from app.metrics import metrics_response
 from app.routes import COMMON_ERROR_RESPONSES
+from app.schemas import ErrorResponse, ValidationErrorResponse
 from app.storage import storage
 from app.storage_policy import storage_breaker
 
@@ -51,15 +52,30 @@ def ready(response: Response) -> dict:
 
 @router.get("/version")
 def version() -> dict[str, str]:
-    return {
-        "app_name": settings.app_name,
-        "app_version": settings.app_version,
-        "queue_backend": settings.queue_backend,
-        "storage_backend": settings.storage_backend,
-    }
+    about = {"app_name": settings.app_name, "app_version": settings.app_version}
+    if settings.app_env == "production":
+        return about  # backends are deployment details; keep them off a public endpoint
+    return {**about, "queue_backend": settings.queue_backend, "storage_backend": settings.storage_backend}
 
 
-@router.get("/metrics")
+def require_metrics_token(authorization: str | None = Header(default=None, alias="Authorization")) -> None:
+    """Open when metrics_token is empty; otherwise "Authorization: Bearer <metrics_token>" is required."""
+    expected = settings.metrics_token
+    if not expected:
+        return
+    scheme, _, presented = (authorization or "").partition(" ")
+    if scheme != "Bearer" or not secret_matches(presented.strip(), expected):
+        raise HTTPException(status_code=401, detail="metrics token required", headers={"WWW-Authenticate": "Bearer"})
+
+
+@router.get(
+    "/metrics",
+    dependencies=[Depends(require_metrics_token)],
+    responses={
+        401: {"model": ErrorResponse, "description": "Metrics token required (only when METRICS_TOKEN is set)"},
+        422: {"model": ValidationErrorResponse, "description": "Request validation failed"},
+    },
+)
 def metrics() -> Response:
     return metrics_response()
 

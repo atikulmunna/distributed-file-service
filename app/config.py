@@ -1,4 +1,5 @@
 import os
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -8,6 +9,9 @@ class Settings(BaseSettings):
 
     app_name: str = "distributed-file-service"
     app_version: str = "dev"
+    # "production" refuses to start with development credentials (see validate_production_settings)
+    # and trims what /version reveals. The container image sets APP_ENV=production.
+    app_env: Literal["development", "production"] = "development"
     host: str = "0.0.0.0"
     port: int = 8000
     database_url: str = "sqlite:///./distributed_file_service.db"
@@ -36,6 +40,8 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_audience: str = ""
     jwt_issuer: str = ""
+    # When set, /metrics requires "Authorization: Bearer <metrics_token>".
+    metrics_token: str = ""
     tracing_enabled: bool = False
     tracing_service_name: str = "distributed-file-service"
     otlp_endpoint: str = "localhost:4317"
@@ -101,6 +107,37 @@ class Settings(BaseSettings):
     # An unreferenced stored object is deleted only once it is older than this: a chunk written to
     # storage but whose DB row is not committed yet must survive the orphan sweep.
     orphan_grace_seconds: int = 3600
+
+
+AUTH_MODES = ("api_key", "jwt", "hybrid")
+DEV_API_KEY = "dev-key"
+DEV_ADMIN_USER = "dev-user"
+MIN_JWT_SECRET_BYTES = 32
+
+
+def parse_api_key_mappings(raw: str) -> dict[str, str]:
+    """ "key:user,key2:user2" -> {"key": "user", "key2": "user2"}; malformed items are skipped."""
+    mapping: dict[str, str] = {}
+    for item in raw.split(","):
+        api_key, sep, user_id = item.strip().partition(":")
+        if sep and api_key.strip() and user_id.strip():
+            mapping[api_key.strip()] = user_id.strip()
+    return mapping
+
+
+def validate_production_settings(s: Settings) -> list[str]:
+    """Problems that make these settings unsafe to run in production (empty when safe)."""
+    problems: list[str] = []
+    mode = s.auth_mode.lower().strip()
+    if mode not in AUTH_MODES:
+        problems.append(f"AUTH_MODE must be one of {', '.join(AUTH_MODES)}")
+    if mode in ("api_key", "hybrid") and DEV_API_KEY in parse_api_key_mappings(s.api_key_mappings):
+        problems.append(f"API_KEY_MAPPINGS contains the public development key {DEV_API_KEY}")
+    if DEV_ADMIN_USER in {item.strip() for item in s.admin_user_ids.split(",")}:
+        problems.append(f"ADMIN_USER_IDS contains the development admin {DEV_ADMIN_USER}")
+    if mode in ("jwt", "hybrid") and len(s.jwt_secret.encode("utf-8")) < MIN_JWT_SECRET_BYTES:
+        problems.append(f"JWT_SECRET must be at least {MIN_JWT_SECRET_BYTES} bytes in {mode} mode")
+    return problems
 
 
 # DFS_ENV_FILE overrides which dotenv file is read; set it to an empty string to read none

@@ -1,10 +1,12 @@
+import hashlib
+import hmac
 from dataclasses import dataclass
 
 import jwt
 from fastapi import Depends, Header, HTTPException
 from jwt import InvalidTokenError
 
-from app.config import settings
+from app.config import AUTH_MODES, parse_api_key_mappings, settings
 from app.metrics import throttled_requests_total
 from app.ratelimit import rate_limiter
 
@@ -16,24 +18,21 @@ class AuthUser:
     is_admin: bool = False
 
 
-def _parse_api_key_mappings() -> dict[str, str]:
-    mapping: dict[str, str] = {}
-    raw = settings.api_key_mappings.strip()
-    if not raw:
-        return mapping
+def secret_matches(presented: str, expected: str) -> bool:
+    """Constant-time comparison of SHA-256 digests: equal lengths, so timing reveals neither how much
+    of the secret matched nor its length."""
+    return hmac.compare_digest(
+        hashlib.sha256(presented.encode("utf-8")).digest(), hashlib.sha256(expected.encode("utf-8")).digest()
+    )
 
-    for item in raw.split(","):
-        pair = item.strip()
-        if not pair:
-            continue
-        if ":" not in pair:
-            continue
-        api_key, user_id = pair.split(":", 1)
-        api_key = api_key.strip()
-        user_id = user_id.strip()
-        if api_key and user_id:
-            mapping[api_key] = user_id
-    return mapping
+
+def _user_for_api_key(presented: str) -> str | None:
+    """Checks every configured key, with no early exit, so timing does not reveal which one matched."""
+    found = None
+    for api_key, user_id in parse_api_key_mappings(settings.api_key_mappings).items():
+        if secret_matches(presented, api_key):
+            found = user_id
+    return found
 
 
 def _parse_bearer_token(authorization: str | None) -> str:
@@ -73,8 +72,7 @@ def _resolve_from_jwt(authorization: str | None) -> tuple[str, str]:
 def _resolve_from_api_key(x_api_key: str | None) -> tuple[str, str]:
     if not x_api_key:
         raise HTTPException(status_code=401, detail="missing API key")
-    mapping = _parse_api_key_mappings()
-    user_id = mapping.get(x_api_key)
+    user_id = _user_for_api_key(x_api_key)
     if not user_id:
         raise HTTPException(status_code=403, detail="invalid API key")
     return user_id, x_api_key
@@ -85,7 +83,7 @@ def require_api_user(
     authorization: str | None = Header(default=None, alias="Authorization"),
 ) -> AuthUser:
     mode = settings.auth_mode.lower().strip()
-    if mode not in {"api_key", "jwt", "hybrid"}:
+    if mode not in AUTH_MODES:
         raise HTTPException(status_code=500, detail=f"unsupported auth_mode: {settings.auth_mode}")
 
     user_id: str

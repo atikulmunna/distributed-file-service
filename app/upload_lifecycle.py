@@ -68,6 +68,7 @@ def _record_complete_key(db, idempotency_key: str, upload_id: str, fingerprint: 
 def claim_completion(
     upload_id: str, user: AuthUser, idempotency_key: str | None, fingerprint: str
 ) -> CompletionWork | CompletionReplay:
+    """idempotency_key is the stored form, already scoped to the user (scoped_idempotency_key)."""
     with SessionLocal() as db:
         upload = get_owned_upload(db, upload_id, user)
         if idempotency_key:

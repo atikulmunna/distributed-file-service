@@ -14,7 +14,7 @@ def test_missing_api_key_rejected() -> None:
         assert "trace_id" in payload
 
 
-def test_upload_owner_enforced_between_users() -> None:
+def test_upload_of_another_user_is_not_found() -> None:
     old_mapping = settings.api_key_mappings
     settings.api_key_mappings = "key-a:user-a,key-b:user-b"
     try:
@@ -27,10 +27,10 @@ def test_upload_owner_enforced_between_users() -> None:
             assert init.status_code == 201
             upload_id = init.json()["upload_id"]
 
-            forbidden = client.get(
+            hidden = client.get(
                 f"/v1/uploads/{upload_id}/missing-chunks",
                 headers={"X-API-Key": "key-b"},
             )
-            assert forbidden.status_code == 403
+            assert hidden.status_code == 404  # same answer as a missing upload
     finally:
         settings.api_key_mappings = old_mapping

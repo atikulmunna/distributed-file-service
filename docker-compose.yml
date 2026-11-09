@@ -41,6 +41,8 @@ services:
       - path: .env
         required: false
     environment:
+      # Local development stack with the public dev keys; APP_ENV=production refuses them.
+      APP_ENV: ${APP_ENV:-development}
       DATABASE_URL: postgresql+psycopg://dfs:dfs@db:5432/dfs
       STORAGE_ROOT: /app/data
       QUEUE_BACKEND: ${QUEUE_BACKEND:-memory}
@@ -102,6 +104,7 @@ services:
     profiles: ["bench"]
     command: ["python", "scripts/bench_init.py"]
     environment: &bench_env
+      APP_ENV: development  # benchmark stack with the public dev keys
       DATABASE_URL: postgresql+psycopg://dfs:dfs@db:5432/dfs_bench
       STORAGE_BACKEND: s3
       S3_BUCKET: dfs
@@ -140,6 +143,7 @@ services:
     profiles: ["cluster"]
     command: ["python", "scripts/bench_init.py"]
     environment: &cluster_env
+      APP_ENV: development  # test cluster with the public dev keys
       DATABASE_URL: postgresql+psycopg://dfs:dfs@db:5432/dfs_cluster
       STORAGE_BACKEND: s3
       S3_BUCKET: dfs-cluster

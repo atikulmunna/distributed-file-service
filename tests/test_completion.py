@@ -249,7 +249,7 @@ def test_abort_completed_upload_is_409(client, auth_headers) -> None:
 def test_abort_requires_ownership(client, auth_headers) -> None:
     upload_id = _new_upload(client, auth_headers, 5, 5)
     response = client.delete(f"/v1/uploads/{upload_id}", headers={"X-API-Key": "other-key"})
-    assert response.status_code in (403, 404)
+    assert response.status_code == 404  # indistinguishable from a missing upload
     assert _status(upload_id) == "INITIATED"
 
 

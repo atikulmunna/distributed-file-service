@@ -48,8 +48,20 @@ class MissingChunksResponse(BaseModel):
 
 
 class ErrorResponse(BaseModel):
+    """Every error body. 5xx bodies carry only detail, error_code and request_id."""
+
     detail: str
     error_code: str
     request_id: str | None = None
     upload_id: str | None = None
     trace_id: str | None = None
+
+
+class FieldError(BaseModel):
+    loc: list[str | int]
+    msg: str
+    type: str
+
+
+class ValidationErrorResponse(ErrorResponse):
+    errors: list[FieldError]

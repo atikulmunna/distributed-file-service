@@ -1,13 +1,15 @@
 import asyncio
 import threading
 import time
+import traceback
 import uuid
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from app.config import settings
+from app.config import settings, validate_production_settings
 from app.finalizer import start_workers
 from app.jobs import job_queue
 from app.logging_utils import INSTANCE_ID, current_trace_id, log_event, request_id_of
@@ -22,6 +24,11 @@ from app.tracing import setup_tracing
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    if settings.app_env == "production":
+        problems = validate_production_settings(settings)
+        if problems:
+            log_event({"event": "startup_refused", "app_env": settings.app_env, "problems": problems})
+            raise RuntimeError("refusing to start in production: " + "; ".join(problems))
     stop_event = asyncio.Event()
     tasks: list[asyncio.Task] = []
 
@@ -80,11 +87,30 @@ def _error_code_for_status(status_code: int) -> str:
         409: "conflict",
         411: "length_required",
         416: "range_not_satisfiable",
+        422: "validation_error",
         429: "throttled",
         499: "client_closed_request",
         500: "internal_error",
+        503: "unavailable",
     }
     return mapping.get(status_code, f"http_{status_code}")
+
+
+def _error_body(request: Request, status_code: int, detail: str) -> dict:
+    if status_code >= 500:
+        # Server errors say only what kind of failure happened; the specifics are logged under request_id.
+        return {
+            "detail": "temporarily unavailable, retry later" if status_code == 503 else "internal error",
+            "error_code": _error_code_for_status(status_code),
+            "request_id": request_id_of(request),
+        }
+    return {
+        "detail": detail,
+        "error_code": _error_code_for_status(status_code),
+        "request_id": request_id_of(request),
+        "upload_id": _upload_id(request),
+        "trace_id": current_trace_id(),
+    }
 
 
 @app.middleware("http")
@@ -135,15 +161,29 @@ async def http_exception_handler(request: Request, exc: HTTPException):
     )
     return JSONResponse(
         status_code=exc.status_code,
-        content={
-            "detail": str(exc.detail),
-            "error_code": _error_code_for_status(exc.status_code),
-            "request_id": request_id_of(request),
-            "upload_id": _upload_id(request),
-            "trace_id": current_trace_id(),
-        },
+        content=_error_body(request, exc.status_code, str(exc.detail)),
         headers=exc.headers or {},
     )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    # Location, message and type only: the submitted value ("input") is not echoed back.
+    errors = [{"loc": list(e.get("loc", ())), "msg": str(e.get("msg", "")), "type": str(e.get("type", ""))} for e in exc.errors()]
+    log_event(
+        {
+            "event": "request_error",
+            "request_id": request_id_of(request),
+            "upload_id": _upload_id(request),
+            "method": request.method,
+            "path": request.url.path,
+            "status_code": 422,
+            "error_class": "client_error",
+            "detail": "request validation failed",
+            "errors": errors,
+        }
+    )
+    return JSONResponse(status_code=422, content={**_error_body(request, 422, "request validation failed"), "errors": errors})
 
 
 @app.exception_handler(Exception)
@@ -157,17 +197,14 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
             "path": request.url.path,
             "status_code": 500,
             "error_class": "unhandled_exception",
+            "exception_type": type(exc).__name__,
             "detail": str(exc),
+            "traceback": "".join(traceback.format_exception(exc)),
         }
     )
+    # This handler runs outside the request middleware, so it sets the correlation headers itself.
     return JSONResponse(
         status_code=500,
-        content={
-            "detail": "internal server error",
-            "error_code": "internal_error",
-            "request_id": request_id_of(request),
-            "upload_id": _upload_id(request),
-            "trace_id": current_trace_id(),
-        },
-        headers={"X-DFS-Instance": INSTANCE_ID},
+        content=_error_body(request, 500, "internal error"),
+        headers={"X-Request-ID": request_id_of(request), "X-DFS-Instance": INSTANCE_ID},
     )
