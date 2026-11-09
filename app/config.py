@@ -74,6 +74,10 @@ class Settings(BaseSettings):
     max_fair_inflight_chunks_per_upload: int = 0
     max_global_inflight_chunks: int = 128
     task_queue_maxsize: int = 512
+    # On shutdown, wait this long for storage writes still running (requests that already ended, for
+    # example by client disconnect). Keep uvicorn's graceful timeout plus this under the container's
+    # stop grace period.
+    shutdown_drain_seconds: int = 10
     # Storage worker threads per instance, fixed. An autoscaler (8 to 32) improved neither throughput
     # nor p95 and was removed; 32 fixed workers were no better than 16 (benchmarks/results/
     # 2026-11-10_pool-sizing.json).

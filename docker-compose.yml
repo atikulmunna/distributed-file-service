@@ -27,14 +27,29 @@ services:
       timeout: 5s
       retries: 20
 
+  # Applies database migrations once, then exits. The API image no longer migrates on start, so
+  # several replicas can never race to run them.
+  app-migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://dfs:dfs@db:5432/dfs
+    depends_on:
+      db:
+        condition: service_healthy
+
   app:
     build:
       context: .
       dockerfile: Dockerfile
     container_name: dfs-app
+    # uvicorn's 30 s graceful timeout plus the 10 s storage drain (SHUTDOWN_DRAIN_SECONDS)
+    stop_grace_period: 45s
     depends_on:
-      db:
-        condition: service_healthy
+      app-migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     env_file:
@@ -63,9 +78,11 @@ services:
       dockerfile: Dockerfile
     profiles: ["workers"]
     command: ["python", "-m", "app.finalizer"]
+    healthcheck:
+      disable: true  # the image's check calls the HTTP API, which this process does not serve
     depends_on:
-      db:
-        condition: service_healthy
+      app-migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     env_file:
@@ -102,7 +119,7 @@ services:
       context: .
       dockerfile: Dockerfile
     profiles: ["bench"]
-    command: ["python", "scripts/bench_init.py"]
+    command: ["sh", "-c", "python scripts/bench_init.py && alembic upgrade head"]
     environment: &bench_env
       APP_ENV: development  # benchmark stack with the public dev keys
       DATABASE_URL: postgresql+psycopg://dfs:dfs@db:5432/dfs_bench
@@ -125,6 +142,7 @@ services:
       dockerfile: Dockerfile
     container_name: dfs-app-bench
     profiles: ["bench"]
+    stop_grace_period: 45s
     environment: *bench_env
     ports:
       - "8001:8000"
@@ -158,6 +176,8 @@ services:
       RATE_LIMIT_BACKEND: redis
       API_RATE_LIMIT_PER_MINUTE: "100"
       API_KEY_MAPPINGS: dev-key:dev-user,limit-key:limit-user
+      # The replicas publish no ports, so only nginx reaches them: trust its X-Forwarded-* headers.
+      FORWARDED_ALLOW_IPS: "*"
     depends_on:
       db:
         condition: service_healthy
@@ -180,8 +200,8 @@ services:
       context: .
       dockerfile: Dockerfile
     profiles: ["cluster"]
-    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
     environment: *cluster_env
+    stop_grace_period: 45s
     deploy:
       replicas: 2
     depends_on:
@@ -197,6 +217,8 @@ services:
     profiles: ["cluster"]
     command: ["python", "-m", "app.finalizer"]
     environment: *cluster_env
+    healthcheck:
+      disable: true  # the image's check calls the HTTP API, which this process does not serve
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -212,7 +234,7 @@ services:
       - ./deploy/nginx.conf:/etc/nginx/nginx.conf:ro
     depends_on:
       app-cluster:
-        condition: service_started
+        condition: service_healthy  # the image's HEALTHCHECK calls /ready
 
 volumes:
   postgres_data:

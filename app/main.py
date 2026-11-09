@@ -20,6 +20,7 @@ from app.routes.uploads import (
     upload_limiter,  # noqa: F401  (re-exported: tests and tools import it from app.main)
 )
 from app.tracing import setup_tracing
+from app.worker import executor
 
 
 @asynccontextmanager
@@ -56,6 +57,8 @@ async def lifespan(_: FastAPI):
         await task
     for worker in workers:
         await asyncio.to_thread(worker.join, 5)
+    remaining = await asyncio.to_thread(executor.drain, settings.shutdown_drain_seconds)
+    log_event({"event": "shutdown_drained", "storage_tasks_left": remaining})
 
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)
@@ -74,7 +77,7 @@ def _route_label(request: Request) -> str:
     route = request.scope.get("route")
     if route is not None and hasattr(route, "path"):
         return str(route.path)
-    return request.url.path
+    return "unmatched"  # never the raw path: arbitrary URLs would each create a new time series
 
 
 def _error_code_for_status(status_code: int) -> str:
