@@ -1,29 +1,13 @@
-import shutil
 import hashlib
-from pathlib import Path
 
 from fastapi.testclient import TestClient
-from sqlalchemy import delete
 
-from app.db import Base, SessionLocal, engine
+from app.db import SessionLocal
 from app.main import app, upload_limiter
-from app.models import Chunk, ChunkRequestIdempotency, CompleteRequestIdempotency, InitRequestIdempotency, Upload
+from app.models import Chunk, ChunkRequestIdempotency, CompleteRequestIdempotency, Upload
 from app.worker import executor
 
 AUTH_HEADERS = {"X-API-Key": "dev-key"}
-
-
-def _reset_state() -> None:
-    Base.metadata.drop_all(bind=engine)
-    Base.metadata.create_all(bind=engine)
-    with SessionLocal() as db:
-        db.execute(delete(ChunkRequestIdempotency))
-        db.execute(delete(CompleteRequestIdempotency))
-        db.execute(delete(InitRequestIdempotency))
-        db.execute(delete(Chunk))
-        db.execute(delete(Upload))
-        db.commit()
-    shutil.rmtree(Path("data"), ignore_errors=True)
 
 
 def _init_upload(client: TestClient, file_size: int, chunk_size: int, headers: dict | None = None) -> str:
@@ -51,7 +35,6 @@ def _init_upload_with_payload(client: TestClient, payload: dict, headers: dict |
 
 
 def test_upload_resume_complete_download_flow() -> None:
-    _reset_state()
     with TestClient(app) as client:
         client.headers.update(AUTH_HEADERS)
         upload_id = _init_upload(client, file_size=11, chunk_size=4)
@@ -84,7 +67,6 @@ def test_upload_resume_complete_download_flow() -> None:
 
 
 def test_complete_rejects_when_chunks_missing() -> None:
-    _reset_state()
     with TestClient(app) as client:
         client.headers.update(AUTH_HEADERS)
         upload_id = _init_upload(client, file_size=8, chunk_size=4)
@@ -101,7 +83,6 @@ def test_complete_rejects_when_chunks_missing() -> None:
 
 
 def test_metrics_endpoint_available() -> None:
-    _reset_state()
     with TestClient(app) as client:
         client.headers.update(AUTH_HEADERS)
         metrics = client.get("/metrics")
@@ -111,7 +92,6 @@ def test_metrics_endpoint_available() -> None:
 
 
 def test_init_idempotency_key_reuses_upload() -> None:
-    _reset_state()
     with TestClient(app) as client:
         client.headers.update(AUTH_HEADERS)
         headers = {"Idempotency-Key": "init-req-1"}
@@ -135,7 +115,6 @@ def test_init_idempotency_key_reuses_upload() -> None:
 
 
 def test_chunk_idempotency_key_replay_does_not_duplicate_rows() -> None:
-    _reset_state()
     with TestClient(app) as client:
         client.headers.update(AUTH_HEADERS)
         upload_id = _init_upload(client, file_size=4, chunk_size=4)
@@ -160,7 +139,6 @@ def test_chunk_idempotency_key_replay_does_not_duplicate_rows() -> None:
 
 
 def test_upload_status_transitions_and_upload_block_after_complete() -> None:
-    _reset_state()
     with TestClient(app) as client:
         client.headers.update(AUTH_HEADERS)
         upload_id = _init_upload(client, file_size=4, chunk_size=4)
@@ -195,7 +173,6 @@ def test_upload_status_transitions_and_upload_block_after_complete() -> None:
 
 
 def test_complete_idempotency_replay() -> None:
-    _reset_state()
     with TestClient(app) as client:
         client.headers.update(AUTH_HEADERS)
         upload_id = _init_upload(client, file_size=4, chunk_size=4)
@@ -224,7 +201,6 @@ def test_complete_idempotency_replay() -> None:
 
 
 def test_throttled_queue_full_returns_retry_headers() -> None:
-    _reset_state()
     old_queue_maxsize = executor.queue_maxsize
     executor.queue_maxsize = 0
     try:
@@ -244,7 +220,6 @@ def test_throttled_queue_full_returns_retry_headers() -> None:
 
 
 def test_throttled_per_upload_limit_returns_retry_headers() -> None:
-    _reset_state()
     old_limit = upload_limiter.limit
     old_fair = upload_limiter.fair_share_limit
     upload_limiter.limit = 0
@@ -267,7 +242,6 @@ def test_throttled_per_upload_limit_returns_retry_headers() -> None:
 
 
 def test_init_idempotency_conflict_for_different_payload() -> None:
-    _reset_state()
     with TestClient(app) as client:
         client.headers.update(AUTH_HEADERS)
         headers = {"Idempotency-Key": "init-conflict-1"}
@@ -286,7 +260,6 @@ def test_init_idempotency_conflict_for_different_payload() -> None:
 
 
 def test_chunk_idempotency_conflict_for_different_payload() -> None:
-    _reset_state()
     with TestClient(app) as client:
         client.headers.update(AUTH_HEADERS)
         upload_id = _init_upload(client, file_size=4, chunk_size=4)
@@ -298,7 +271,6 @@ def test_chunk_idempotency_conflict_for_different_payload() -> None:
 
 
 def test_complete_idempotency_conflict_for_different_uploads() -> None:
-    _reset_state()
     with TestClient(app) as client:
         client.headers.update(AUTH_HEADERS)
         upload_a = _init_upload(client, file_size=4, chunk_size=4)
@@ -320,7 +292,6 @@ def test_complete_idempotency_conflict_for_different_uploads() -> None:
 
 
 def test_chunk_checksum_header_rejects_mismatch() -> None:
-    _reset_state()
     with TestClient(app) as client:
         client.headers.update(AUTH_HEADERS)
         upload_id = _init_upload(client, file_size=4, chunk_size=4)
@@ -334,7 +305,6 @@ def test_chunk_checksum_header_rejects_mismatch() -> None:
 
 
 def test_file_checksum_validated_on_complete_success() -> None:
-    _reset_state()
     payload = b"abcdefgh"
     checksum = hashlib.sha256(payload).hexdigest()
     with TestClient(app) as client:
@@ -367,7 +337,6 @@ def test_file_checksum_validated_on_complete_success() -> None:
 
 
 def test_file_checksum_validated_on_complete_mismatch() -> None:
-    _reset_state()
     with TestClient(app) as client:
         client.headers.update(AUTH_HEADERS)
         upload_id = _init_upload_with_payload(

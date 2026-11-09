@@ -1,29 +1,11 @@
 import jwt
 from fastapi.testclient import TestClient
-from sqlalchemy import delete
 
-from app.auth import api_key_rate_limiter
 from app.config import settings
-from app.db import Base, SessionLocal, engine
 from app.main import app
-from app.models import Chunk, ChunkRequestIdempotency, CompleteRequestIdempotency, InitRequestIdempotency, Upload
-
-
-def _reset_state() -> None:
-    Base.metadata.drop_all(bind=engine)
-    Base.metadata.create_all(bind=engine)
-    with SessionLocal() as db:
-        db.execute(delete(ChunkRequestIdempotency))
-        db.execute(delete(CompleteRequestIdempotency))
-        db.execute(delete(InitRequestIdempotency))
-        db.execute(delete(Chunk))
-        db.execute(delete(Upload))
-        db.commit()
-    api_key_rate_limiter.reset()
 
 
 def test_jwt_mode_accepts_valid_bearer_token() -> None:
-    _reset_state()
     old_mode = settings.auth_mode
     old_secret = settings.jwt_secret
     old_algo = settings.jwt_algorithm
@@ -52,7 +34,6 @@ def test_jwt_mode_accepts_valid_bearer_token() -> None:
 
 
 def test_jwt_mode_rejects_invalid_token() -> None:
-    _reset_state()
     old_mode = settings.auth_mode
     old_secret = settings.jwt_secret
     settings.auth_mode = "jwt"
@@ -72,7 +53,6 @@ def test_jwt_mode_rejects_invalid_token() -> None:
 
 
 def test_hybrid_mode_keeps_api_key_fallback() -> None:
-    _reset_state()
     old_mode = settings.auth_mode
     settings.auth_mode = "hybrid"
     try:

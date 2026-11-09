@@ -1,3 +1,5 @@
+import os
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -57,4 +59,6 @@ class Settings(BaseSettings):
     idempotency_ttl_seconds: int = 86400
 
 
-settings = Settings()
+# DFS_ENV_FILE overrides which dotenv file is read; set it to an empty string to read none
+# (the test suite does this so a developer .env can never point tests at real services).
+settings = Settings(_env_file=os.getenv("DFS_ENV_FILE", ".env") or None)

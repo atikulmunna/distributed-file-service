@@ -1,13 +1,12 @@
 from datetime import datetime, timedelta, timezone
 
 from fastapi.testclient import TestClient
-from sqlalchemy import delete
 
-from app.db import Base, SessionLocal, engine
+from app.db import SessionLocal
 from app.main import app
 from app.maintenance import cleanup_once
 from app.config import settings
-from app.models import Chunk, ChunkRequestIdempotency, CompleteRequestIdempotency, InitRequestIdempotency, Upload
+from app.models import Chunk, InitRequestIdempotency, Upload
 
 
 class _FakeStorage:
@@ -21,20 +20,7 @@ class _FakeStorage:
         return sorted([k for k in self.keys if k.startswith(prefix)])
 
 
-def _reset_state() -> None:
-    Base.metadata.drop_all(bind=engine)
-    Base.metadata.create_all(bind=engine)
-    with SessionLocal() as db:
-        db.execute(delete(ChunkRequestIdempotency))
-        db.execute(delete(CompleteRequestIdempotency))
-        db.execute(delete(InitRequestIdempotency))
-        db.execute(delete(Chunk))
-        db.execute(delete(Upload))
-        db.commit()
-
-
 def test_cleanup_deletes_stale_uploads_and_orphans(monkeypatch) -> None:
-    _reset_state()
     fake_storage = _FakeStorage()
     fake_storage.keys.update(
         {
@@ -59,6 +45,8 @@ def test_cleanup_deletes_stale_uploads_and_orphans(monkeypatch) -> None:
             updated_at=old,
         )
         db.add(stale)
+        # No ORM relationship orders the idempotency insert after the upload, and Postgres enforces the FK.
+        db.flush()
         db.add(
             Chunk(
                 upload_id="stale-upload",
