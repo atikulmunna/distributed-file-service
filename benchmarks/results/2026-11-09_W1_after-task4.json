@@ -1,0 +1,74 @@
+{
+  "meta": {
+    "label": "after-task4",
+    "timestamp_utc": "2026-11-09T11:07:00+00:00",
+    "git_sha": "6a4403258cce335f4b44a9a05fa01c8df7af4eab",
+    "git_dirty": true,
+    "platform": "Windows-11-10.0.26300-SP0",
+    "python": "3.12.13",
+    "cpu_count": 32,
+    "server_version": {
+      "app_name": "distributed-file-service",
+      "app_version": "dev",
+      "queue_backend": "memory",
+      "storage_backend": "s3"
+    }
+  },
+  "config": {
+    "workload": "W1",
+    "files": 20,
+    "file_size_bytes": 67108864,
+    "chunk_size_bytes": 8388608,
+    "concurrent_files": 8,
+    "per_file_chunk_workers": 4,
+    "download": true
+  },
+  "args": {
+    "base_url": "http://localhost:8001",
+    "workload": "W1",
+    "label": "after-task4",
+    "files": 5,
+    "file_size_bytes": 5242880,
+    "chunk_size_bytes": 1048576,
+    "profile": "balanced",
+    "concurrent_files": null,
+    "per_file_chunk_workers": null,
+    "download": false,
+    "output": "",
+    "api_key": true
+  },
+  "upload": {
+    "files": 20,
+    "failed_files": 0,
+    "first_errors": [],
+    "elapsed_seconds": 24.511,
+    "bytes": 1342177280,
+    "throughput_mib_per_s": 52.221,
+    "chunk_latency_ms": {
+      "count": 160,
+      "avg": 3822.953,
+      "p50": 3564.426,
+      "p95": 6349.4,
+      "p99": 6447.991,
+      "max": 6667.795
+    },
+    "file_total_ms_avg": 9004.861
+  },
+  "download": {
+    "files": 20,
+    "verified_files": 20,
+    "elapsed_seconds": 10.534,
+    "bytes": 1342177280,
+    "throughput_mib_per_s": 121.515,
+    "file_total_ms": {
+      "count": 20,
+      "avg": 3820.273,
+      "p50": 4026.713,
+      "p95": 4628.403,
+      "p99": 4663.997,
+      "max": 4663.997
+    }
+  },
+  "retries": 0,
+  "errors_by_status": {}
+}
