@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 from app.config import settings
 from app.finalizer import start_workers
 from app.jobs import job_queue
-from app.logging_utils import current_trace_id, log_event, request_id_of
+from app.logging_utils import INSTANCE_ID, current_trace_id, log_event, request_id_of
 from app.maintenance import cleanup_once
 from app.metrics import http_request_duration_seconds
 from app.routes import console, ops, uploads
@@ -136,6 +136,7 @@ async def request_context_and_logging(request: Request, call_next):
     duration_seconds = duration_ms / 1000.0
     response.headers["X-Request-ID"] = request_id
     response.headers["X-DFS-App-Version"] = settings.app_version
+    response.headers["X-DFS-Instance"] = INSTANCE_ID
     http_request_duration_seconds.labels(
         method=request.method,
         route=_route_label(request),
@@ -206,4 +207,5 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
             "upload_id": _upload_id(request),
             "trace_id": current_trace_id(),
         },
+        headers={"X-DFS-Instance": INSTANCE_ID},
     )

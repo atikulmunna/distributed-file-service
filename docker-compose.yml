@@ -38,7 +38,8 @@ services:
       redis:
         condition: service_healthy
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
       DATABASE_URL: postgresql+psycopg://dfs:dfs@db:5432/dfs
       STORAGE_ROOT: /app/data
@@ -66,7 +67,8 @@ services:
       redis:
         condition: service_healthy
     env_file:
-      - .env
+      - path: .env
+        required: false
     environment:
       DATABASE_URL: postgresql+psycopg://dfs:dfs@db:5432/dfs
       STORAGE_ROOT: /app/data
@@ -82,7 +84,7 @@ services:
   s3:
     image: versity/versitygw:v1.10.0
     container_name: dfs-s3
-    profiles: ["bench"]
+    profiles: ["bench", "cluster"]
     environment:
       ROOT_ACCESS_KEY: dfs-local-access
       ROOT_SECRET_KEY: dfs-local-secret-key
@@ -126,6 +128,87 @@ services:
     depends_on:
       bench-init:
         condition: service_completed_successfully
+
+  # Two-instance cluster: `docker compose --profile cluster up -d --build`, then use http://localhost:8080.
+  # nginx round-robins across 2 app replicas; migrations run once in "migrate"; verification runs in
+  # "finalizer-cluster"; Redis carries the job queue and the shared per-user rate limit. No .env file
+  # is read, so the cluster's config is exactly what is written here.
+  cluster-init:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    profiles: ["cluster"]
+    command: ["python", "scripts/bench_init.py"]
+    environment: &cluster_env
+      DATABASE_URL: postgresql+psycopg://dfs:dfs@db:5432/dfs_cluster
+      STORAGE_BACKEND: s3
+      S3_BUCKET: dfs-cluster
+      S3_ENDPOINT_URL: http://s3:7070
+      AWS_ACCESS_KEY_ID: dfs-local-access
+      AWS_SECRET_ACCESS_KEY: dfs-local-secret-key
+      AWS_REGION: us-east-1
+      QUEUE_BACKEND: redis
+      REDIS_URL: redis://redis:6379/0
+      REDIS_STREAM_NAME: dfs:cluster:finalize
+      FINALIZER_IN_PROCESS: "false"
+      RATE_LIMIT_BACKEND: redis
+      API_RATE_LIMIT_PER_MINUTE: "100"
+      API_KEY_MAPPINGS: dev-key:dev-user,limit-key:limit-user
+    depends_on:
+      db:
+        condition: service_healthy
+      s3:
+        condition: service_started
+
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    profiles: ["cluster"]
+    command: ["alembic", "upgrade", "head"]
+    environment: *cluster_env
+    depends_on:
+      cluster-init:
+        condition: service_completed_successfully
+
+  app-cluster:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    profiles: ["cluster"]
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    environment: *cluster_env
+    deploy:
+      replicas: 2
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  finalizer-cluster:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    profiles: ["cluster"]
+    command: ["python", "-m", "app.finalizer"]
+    environment: *cluster_env
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+
+  nginx:
+    image: nginx:1.27.3-alpine
+    profiles: ["cluster"]
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./deploy/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      app-cluster:
+        condition: service_started
 
 volumes:
   postgres_data:

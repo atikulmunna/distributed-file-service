@@ -30,6 +30,8 @@ class Settings(BaseSettings):
     api_key_mappings: str = "dev-key:dev-user"
     admin_user_ids: str = "dev-user"
     api_rate_limit_per_minute: int = 0
+    # "memory": per instance; "redis": one budget per user shared by every instance (uses redis_url).
+    rate_limit_backend: str = "memory"
     jwt_secret: str = ""
     jwt_algorithm: str = "HS256"
     jwt_audience: str = ""
@@ -58,6 +60,10 @@ class Settings(BaseSettings):
     max_retries: int = 3  # retries after the first attempt, for transient storage errors only
     retry_base_delay_ms: int = 100
     retry_max_delay_ms: int = 2000
+    # Storage circuit breaker (per instance): after this many consecutive transient storage failures,
+    # storage calls fail immediately with 503 for breaker_open_seconds, then one probe call decides.
+    breaker_failure_threshold: int = 5
+    breaker_open_seconds: int = 10
     max_inflight_chunks_per_upload: int = 8
     max_fair_inflight_chunks_per_upload: int = 0
     max_global_inflight_chunks: int = 128

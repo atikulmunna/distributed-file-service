@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -91,6 +92,10 @@ class ChunkStorage:
     def object_exists(self, key: str) -> bool:
         raise NotImplementedError
 
+    def check(self) -> None:
+        """Raise if this backend cannot serve requests right now (used by /ready)."""
+        raise NotImplementedError
+
     def iter_object(self, key: str, block_size: int = 8 * 1024 * 1024) -> Iterator[bytes]:
         """Stream an object in blocks without loading it whole."""
         raise NotImplementedError
@@ -144,6 +149,11 @@ class LocalChunkStorage(ChunkStorage):
 
     def object_exists(self, key: str) -> bool:
         return (self.root / key).is_file()
+
+    def check(self) -> None:
+        probe = self.root / f".ready-{uuid.uuid4().hex}"
+        probe.write_bytes(b"")
+        probe.unlink()
 
     def iter_object(self, key: str, block_size: int = 8 * 1024 * 1024) -> Iterator[bytes]:
         with (self.root / key).open("rb") as handle:
@@ -296,6 +306,9 @@ class S3ChunkStorage(ChunkStorage):
         except ClientError as exc:
             if exc.response.get("Error", {}).get("Code") not in ("NoSuchUpload", "404"):
                 raise
+
+    def check(self) -> None:
+        self.client.head_bucket(Bucket=self.bucket)
 
     def object_exists(self, key: str) -> bool:
         from botocore.exceptions import ClientError

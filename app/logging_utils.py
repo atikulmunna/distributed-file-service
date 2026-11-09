@@ -2,9 +2,15 @@
 
 import json
 import logging
+import socket
+import uuid
 
 from fastapi import Request
 from opentelemetry import trace
+
+# Identifies this process in logs and in the X-DFS-Instance response header (hostname is the
+# container id under Docker; the suffix tells apart processes on one host).
+INSTANCE_ID = f"{socket.gethostname()}-{uuid.uuid4().hex[:6]}"
 
 request_logger = logging.getLogger("dfs.request")
 if not request_logger.handlers:
@@ -33,9 +39,11 @@ def request_id_of(request: Request) -> str:
 
 def log_event(payload: dict) -> None:
     payload.setdefault("trace_id", current_trace_id())
+    payload.setdefault("instance_id", INSTANCE_ID)
     request_logger.info(json.dumps(payload, sort_keys=True, separators=(",", ":")))
 
 
 def audit_event(payload: dict) -> None:
     payload.setdefault("trace_id", current_trace_id())
+    payload.setdefault("instance_id", INSTANCE_ID)
     audit_logger.info(json.dumps(payload, sort_keys=True, separators=(",", ":")))

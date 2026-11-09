@@ -1,6 +1,6 @@
 from fastapi.testclient import TestClient
 
-from app.auth import api_key_rate_limiter
+from app.ratelimit import rate_limiter
 from app.config import settings
 from app.main import app
 
@@ -25,4 +25,4 @@ def test_api_key_rate_limit_enforced() -> None:
             assert payload["error_code"] == "throttled"
     finally:
         settings.api_rate_limit_per_minute = old_limit
-        api_key_rate_limiter.reset()
+        rate_limiter.reset()

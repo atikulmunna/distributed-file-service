@@ -1,12 +1,18 @@
 """Operational endpoints: health, version, metrics, admin maintenance."""
 
 from fastapi import APIRouter, Depends, Response
+from sqlalchemy import text
 
 from app.auth import AuthUser, require_admin_user
 from app.config import settings
+from app.db import engine
+from app.jobs import job_queue
+from app.logging_utils import INSTANCE_ID
 from app.maintenance import cleanup_once
 from app.metrics import metrics_response
 from app.routes import COMMON_ERROR_RESPONSES
+from app.storage import storage
+from app.storage_policy import storage_breaker
 
 router = APIRouter()
 
@@ -14,6 +20,33 @@ router = APIRouter()
 @router.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+def _check(probe) -> str:
+    try:
+        result = probe()
+    except Exception as exc:
+        return f"error: {type(exc).__name__}"
+    return "error: ping failed" if result is False else "ok"
+
+
+def _database_ping() -> None:
+    with engine.connect() as conn:
+        conn.execute(text("SELECT 1"))
+
+
+@router.get("/ready")
+def ready(response: Response) -> dict:
+    """Readiness: can this instance serve requests now? Checks the database, object storage (skipped
+    while the storage circuit breaker is open), and the job queue. /health stays a liveness check."""
+    checks = {
+        "database": _check(_database_ping),
+        "storage": _check(storage.check) if storage_breaker.allows_traffic() else "down: circuit breaker open",
+        "queue": _check(job_queue.ping),
+    }
+    ok = all(value == "ok" for value in checks.values())
+    response.status_code = 200 if ok else 503
+    return {"status": "ready" if ok else "not ready", "instance_id": INSTANCE_ID, "checks": checks}
 
 
 @router.get("/version")

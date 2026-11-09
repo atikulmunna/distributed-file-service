@@ -1,14 +1,12 @@
 from dataclasses import dataclass
-from collections import deque
-from threading import Lock
-import time
 
-from fastapi import Depends, Header, HTTPException
 import jwt
+from fastapi import Depends, Header, HTTPException
 from jwt import InvalidTokenError
 
 from app.config import settings
 from app.metrics import throttled_requests_total
+from app.ratelimit import rate_limiter
 
 
 @dataclass(frozen=True)
@@ -16,34 +14,6 @@ class AuthUser:
     user_id: str
     api_key: str
     is_admin: bool = False
-
-
-class ApiKeyRateLimiter:
-    def __init__(self) -> None:
-        self._events: dict[str, deque[float]] = {}
-        self._lock = Lock()
-
-    def reset(self) -> None:
-        with self._lock:
-            self._events.clear()
-
-    def allow(self, api_key: str, limit: int, window_seconds: int) -> bool:
-        if limit <= 0:
-            return True
-        now = time.time()
-        cutoff = now - window_seconds
-
-        with self._lock:
-            bucket = self._events.setdefault(api_key, deque())
-            while bucket and bucket[0] < cutoff:
-                bucket.popleft()
-            if len(bucket) >= limit:
-                return False
-            bucket.append(now)
-            return True
-
-
-api_key_rate_limiter = ApiKeyRateLimiter()
 
 
 def _parse_api_key_mappings() -> dict[str, str]:
@@ -135,7 +105,8 @@ def require_api_user(
         user_id, rate_key = _resolve_from_api_key(x_api_key)
         source = "api_key"
 
-    if not api_key_rate_limiter.allow(rate_key, settings.api_rate_limit_per_minute, 60):
+    # Keyed by user, not by credential: a new token or key does not buy a new budget.
+    if not rate_limiter.allow(user_id, settings.api_rate_limit_per_minute, 60):
         throttled_requests_total.inc()
         raise HTTPException(
             status_code=429,

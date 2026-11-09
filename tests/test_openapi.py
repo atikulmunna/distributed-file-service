@@ -22,6 +22,7 @@ EXPECTED_API_SURFACE = [
     ("/console", "GET"),
     ("/health", "GET"),
     ("/metrics", "GET"),
+    ("/ready", "GET"),
     ("/ui", "GET"),
     ("/v1/admin/cleanup", "POST"),
     ("/v1/uploads/init", "POST"),

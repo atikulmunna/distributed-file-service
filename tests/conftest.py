@@ -52,12 +52,13 @@ from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy import create_engine, text  # noqa: E402
 
 from app import models  # noqa: E402,F401  (registers tables on Base.metadata)
-from app.auth import api_key_rate_limiter  # noqa: E402
+from app.ratelimit import rate_limiter  # noqa: E402
 from app.config import settings  # noqa: E402
 from app.db import Base, SessionLocal, engine  # noqa: E402
 from app.jobs import job_queue  # noqa: E402
 from app.main import app  # noqa: E402
 from app.storage import storage  # noqa: E402
+from app.storage_policy import storage_breaker  # noqa: E402
 
 
 def _empty_tables() -> None:
@@ -83,7 +84,8 @@ def _clean_state():
     _empty_tables()
     shutil.rmtree(STORAGE_ROOT, ignore_errors=True)
     STORAGE_ROOT.mkdir(parents=True, exist_ok=True)
-    api_key_rate_limiter.reset()
+    rate_limiter.reset()
+    storage_breaker.reset()
     job_queue.clear()
     yield
 
