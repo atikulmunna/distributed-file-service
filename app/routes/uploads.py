@@ -1,33 +1,35 @@
 """Upload lifecycle endpoints: init, chunk upload, complete, missing chunks, download."""
 
+import asyncio
 import hashlib
 import json
 import math
-import time
 from collections.abc import Iterator
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
+from starlette.concurrency import run_in_threadpool
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.auth import AuthUser, require_api_user
+from app.chunk_service import (
+    persist_chunk,
+    persist_chunk_via_queue,
+    prepare_chunk,
+    record_chunk,
+    use_external_durable_queue,
+)
 from app.config import settings
 from app.db import get_db
-from app.durable_queue import ChunkResultStore, ChunkWriteTask, build_durable_queue
 from app.limits import PerUploadInflightLimiter
 from app.logging_utils import audit_event, request_id_of
 from app.metrics import (
-    bytes_uploaded_total,
-    chunks_uploaded_total,
     chunk_upload_failures_total,
-    db_update_latency_seconds,
     retries_total,
-    s3_put_latency_seconds,
 )
 from app.models import (
     Chunk,
-    ChunkRequestIdempotency,
     ChunkStatus,
     CompleteRequestIdempotency,
     InitRequestIdempotency,
@@ -44,17 +46,10 @@ from app.schemas import (
 )
 from app.routes import COMMON_ERROR_RESPONSES
 from app.storage import storage
+from app.upload_access import get_owned_upload
 from app.worker import executor
 
 router = APIRouter()
-
-durable_queue = build_durable_queue()
-chunk_result_store = ChunkResultStore()
-
-
-def _use_external_durable_queue() -> bool:
-    return settings.queue_backend.lower() in ("redis", "sqs")
-
 
 _fair_share_cap = (
     settings.max_fair_inflight_chunks_per_upload
@@ -68,15 +63,6 @@ MIN_MULTIPART_PART_SIZE = 5 * 1024 * 1024
 
 def _fingerprint(obj: dict) -> str:
     return hashlib.sha256(json.dumps(obj, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
-
-
-def _get_owned_upload(db: Session, upload_id: str, user: AuthUser) -> Upload:
-    upload = db.get(Upload, upload_id)
-    if not upload:
-        raise HTTPException(status_code=404, detail="upload not found")
-    if upload.owner_id != user.user_id:
-        raise HTTPException(status_code=403, detail="forbidden for this upload owner")
-    return upload
 
 
 @router.post(
@@ -172,34 +158,6 @@ def init_upload(
     )
 
 
-def _persist_chunk(
-    upload_id: str, chunk_index: int, data: bytes, multipart_upload_id: str | None
-) -> tuple[str, str | None]:
-    start = time.perf_counter()
-    result = storage.write_chunk(upload_id, chunk_index, data, multipart_upload_id=multipart_upload_id)
-    s3_put_latency_seconds.observe(time.perf_counter() - start)
-    return result.key, result.etag
-
-
-def _persist_chunk_via_durable_queue(
-    upload_id: str, chunk_index: int, data: bytes, multipart_upload_id: str | None
-) -> tuple[str, str | None]:
-    task = ChunkWriteTask.from_bytes(
-        upload_id=upload_id,
-        chunk_index=chunk_index,
-        data=data,
-        multipart_upload_id=multipart_upload_id,
-    )
-    durable_queue.enqueue(task)
-    outcome = chunk_result_store.wait(task.task_id, timeout_seconds=settings.queue_task_timeout_seconds)
-    if outcome is None:
-        raise HTTPException(status_code=504, detail="chunk task timeout while waiting for durable queue result")
-    success, payload = outcome
-    if not success:
-        raise RuntimeError(payload["error"])
-    return payload["key"], payload["etag"]
-
-
 @router.put(
     "/v1/uploads/{upload_id}/chunks/{chunk_index}",
     response_model=UploadChunkResponse,
@@ -219,55 +177,26 @@ async def upload_chunk(
     chunk_sha256: str | None = Header(default=None, alias="X-Chunk-SHA256"),
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     user: AuthUser = Depends(require_api_user),
-    db: Session = Depends(get_db),
 ) -> UploadChunkResponse:
-    upload = _get_owned_upload(db, upload_id, user)
-    if upload.status not in (UploadStatus.in_progress.value, UploadStatus.initiated.value):
-        raise HTTPException(status_code=409, detail="upload is not accepting chunks")
-    if chunk_index < 0 or chunk_index >= upload.total_chunks:
-        raise HTTPException(status_code=400, detail="chunk index out of bounds")
+    # Only awaits happen on the event loop. Validation (with hashing), the storage write, and
+    # the DB write each run on worker threads, and no DB connection is held between them.
     body = await request.body()
-    if not body:
-        raise HTTPException(status_code=400, detail="chunk payload is empty")
-    if content_length and content_length != len(body):
-        raise HTTPException(status_code=400, detail="content-length mismatch")
-
-    chunk_fingerprint = hashlib.sha256(body).hexdigest()
-    if chunk_sha256 and chunk_sha256.lower() != chunk_fingerprint:
-        raise HTTPException(status_code=400, detail="chunk checksum mismatch")
-    if idempotency_key:
-        existing_request = db.scalar(
-            select(ChunkRequestIdempotency).where(
-                ChunkRequestIdempotency.upload_id == upload_id,
-                ChunkRequestIdempotency.chunk_index == chunk_index,
-                ChunkRequestIdempotency.idempotency_key == idempotency_key,
-            )
-        )
-        if existing_request:
-            if existing_request.request_fingerprint != chunk_fingerprint:
-                raise HTTPException(status_code=409, detail="idempotency key reused with different chunk payload")
-            existing_chunk = db.scalar(select(Chunk).where(Chunk.upload_id == upload_id, Chunk.chunk_index == chunk_index))
-            if existing_chunk and existing_chunk.status == ChunkStatus.uploaded.value:
-                return UploadChunkResponse(
-                    upload_id=upload_id,
-                    chunk_index=chunk_index,
-                    status=existing_chunk.status,
-                )
+    prepared = await run_in_threadpool(
+        prepare_chunk, upload_id, chunk_index, body, chunk_sha256, idempotency_key, user, declared_length=content_length
+    )
+    if isinstance(prepared, UploadChunkResponse):
+        return prepared
+    plan = prepared
 
     upload_limiter.acquire(upload_id)
     try:
         retries = 0
         while True:
             try:
-                if _use_external_durable_queue():
-                    s3_key, s3_etag = _persist_chunk_via_durable_queue(
-                        upload_id, chunk_index, body, upload.multipart_upload_id
-                    )
+                if use_external_durable_queue():
+                    result = await run_in_threadpool(persist_chunk_via_queue, plan, body)
                 else:
-                    future = executor.submit(
-                        _persist_chunk, upload_id, chunk_index, body, upload.multipart_upload_id
-                    )
-                    s3_key, s3_etag = future.result()
+                    result = await asyncio.wrap_future(executor.submit(persist_chunk, plan, body))
                 break
             except HTTPException:
                 raise
@@ -278,43 +207,7 @@ async def upload_chunk(
                     chunk_upload_failures_total.inc()
                     raise HTTPException(status_code=500, detail=f"chunk upload failed: {exc}") from exc
 
-        db_t0 = time.perf_counter()
-        existing = db.scalar(select(Chunk).where(Chunk.upload_id == upload_id, Chunk.chunk_index == chunk_index))
-        if existing:
-            existing.size_bytes = len(body)
-            existing.chunk_checksum_sha256 = chunk_fingerprint
-            existing.s3_key = s3_key
-            existing.s3_etag = s3_etag
-            existing.status = ChunkStatus.uploaded.value
-            existing.retry_count = retries
-        else:
-            db.add(
-                Chunk(
-                    upload_id=upload_id,
-                    chunk_index=chunk_index,
-                    size_bytes=len(body),
-                    chunk_checksum_sha256=chunk_fingerprint,
-                    s3_key=s3_key,
-                    s3_etag=s3_etag,
-                    status=ChunkStatus.uploaded.value,
-                    retry_count=retries,
-                )
-            )
-        if upload.status == UploadStatus.initiated.value:
-            upload.status = UploadStatus.in_progress.value
-        if idempotency_key:
-            db.add(
-                ChunkRequestIdempotency(
-                    upload_id=upload_id,
-                    chunk_index=chunk_index,
-                    idempotency_key=idempotency_key,
-                    request_fingerprint=chunk_fingerprint,
-                )
-            )
-        db.commit()
-        db_update_latency_seconds.observe(time.perf_counter() - db_t0)
-        chunks_uploaded_total.inc()
-        bytes_uploaded_total.inc(len(body))
+        await run_in_threadpool(record_chunk, plan, result, retries, idempotency_key)
     finally:
         upload_limiter.release(upload_id)
 
@@ -338,7 +231,7 @@ def complete_upload(
     db: Session = Depends(get_db),
 ) -> CompleteUploadResponse:
     request_fingerprint = _fingerprint({"upload_id": upload_id})
-    upload = _get_owned_upload(db, upload_id, user)
+    upload = get_owned_upload(db, upload_id, user)
 
     if idempotency_key:
         existing_request = db.get(CompleteRequestIdempotency, idempotency_key)
@@ -439,7 +332,7 @@ def missing_chunks(
     user: AuthUser = Depends(require_api_user),
     db: Session = Depends(get_db),
 ) -> MissingChunksResponse:
-    upload = _get_owned_upload(db, upload_id, user)
+    upload = get_owned_upload(db, upload_id, user)
 
     uploaded_indexes = set(
         db.scalars(
@@ -499,7 +392,7 @@ def download(
     user: AuthUser = Depends(require_api_user),
     db: Session = Depends(get_db),
 ) -> Response:
-    upload = _get_owned_upload(db, upload_id, user)
+    upload = get_owned_upload(db, upload_id, user)
     if upload.status != UploadStatus.completed.value:
         raise HTTPException(status_code=409, detail="upload is not completed")
 

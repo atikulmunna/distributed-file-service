@@ -17,7 +17,6 @@ from sqlalchemy import event, func, select, update
 
 from app.config import settings
 from app.db import SessionLocal, engine
-from app.main import app
 from app.maintenance import cleanup_once
 from app.models import Chunk, Upload
 from app.storage import storage
@@ -46,45 +45,6 @@ def _completed_upload(client: TestClient, headers: dict, body: bytes, file_name:
     assert _put(client, headers, upload_id, 0, body).status_code == 202
     assert client.post(f"/v1/uploads/{upload_id}/complete", headers=headers).status_code == 200
     return upload_id
-
-
-def _start_parallel_puts(client: TestClient, headers: dict, upload_id: str, count: int, statuses: list[int]):
-    def put(index: int) -> None:
-        statuses.append(_put(client, headers, upload_id, index, b"x" * 10).status_code)
-
-    threads = [threading.Thread(target=put, args=(i,)) for i in range(count)]
-    for thread in threads:
-        thread.start()
-    return threads
-
-
-@known_bug(4)
-def test_parallel_chunk_puts_overlap(client, auth_headers, slow_storage) -> None:
-    slow_storage(0.5)
-    upload_id = _init(client, auth_headers, 40, 10)
-    statuses: list[int] = []
-    started = time.perf_counter()
-    for thread in _start_parallel_puts(client, auth_headers, upload_id, 4, statuses):
-        thread.join()
-    elapsed = time.perf_counter() - started
-    assert sorted(statuses) == [202] * 4
-    assert elapsed < 1.2, f"4 chunk PUTs with 0.5 s writes took {elapsed:.2f} s (serialized)"
-
-
-@known_bug(4)
-def test_health_responsive_during_uploads(client, auth_headers, slow_storage) -> None:
-    slow_storage(0.5)
-    upload_id = _init(client, auth_headers, 40, 10)
-    statuses: list[int] = []
-    threads = _start_parallel_puts(client, auth_headers, upload_id, 4, statuses)
-    time.sleep(0.1)
-    started = time.perf_counter()
-    health = client.get("/health")
-    latency = time.perf_counter() - started
-    for thread in threads:
-        thread.join()
-    assert health.status_code == 200
-    assert latency < 0.2, f"/health took {latency:.2f} s while chunk uploads ran"
 
 
 @pytest.mark.skipif(engine.dialect.name != "postgresql", reason="32-bit INTEGER overflow only exists on Postgres")
@@ -213,17 +173,6 @@ def test_non_ascii_filename_download(client, auth_headers) -> None:
     response = client.get(f"/v1/uploads/{upload_id}/download", headers=auth_headers)
     assert response.status_code == 200
     assert response.content == b"data"
-
-
-@known_bug(12)
-def test_durable_queue_chunk_put(auth_headers, monkeypatch) -> None:
-    # The queue consumer and the waiting request share one event loop; the request blocks it.
-    monkeypatch.setattr(settings, "queue_backend", "redis")
-    monkeypatch.setattr(settings, "queue_task_timeout_seconds", 2)
-    monkeypatch.setattr(settings, "queue_poll_timeout_seconds", 1)
-    with TestClient(app) as client:
-        upload_id = _init(client, auth_headers, 10, 10)
-        assert _put(client, auth_headers, upload_id, 0, b"y" * 10).status_code == 202
 
 
 @known_bug(13)

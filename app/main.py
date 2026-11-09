@@ -11,14 +11,9 @@ from app.db import SessionLocal
 from app.logging_utils import current_trace_id, log_event, request_id_of
 from app.maintenance import cleanup_once
 from app.metrics import http_request_duration_seconds
+from app.chunk_service import chunk_result_store, durable_queue, use_external_durable_queue, write_to_storage
 from app.routes import console, ops, uploads
-from app.routes.uploads import (
-    _persist_chunk,
-    _use_external_durable_queue,
-    chunk_result_store,
-    durable_queue,
-    upload_limiter,  # noqa: F401  (re-exported: tests and tools import it from app.main)
-)
+from app.routes.uploads import upload_limiter  # noqa: F401  (re-exported: tests and tools import it from app.main)
 from app.tracing import setup_tracing
 from app.worker import executor
 
@@ -76,13 +71,13 @@ async def lifespan(_: FastAPI):
 
     def _process_queue_message(message) -> None:
         try:
-            key, etag = _persist_chunk(
+            result = write_to_storage(
                 upload_id=message.task.upload_id,
                 chunk_index=message.task.chunk_index,
                 data=message.task.data(),
                 multipart_upload_id=message.task.multipart_upload_id,
             )
-            chunk_result_store.set_success(message.task.task_id, key=key, etag=etag)
+            chunk_result_store.set_success(message.task.task_id, key=result.key, etag=result.etag)
             durable_queue.ack(message.receipt)
         except Exception as exc:
             chunk_result_store.set_error(message.task.task_id, error=str(exc))
@@ -117,7 +112,7 @@ async def lifespan(_: FastAPI):
     if settings.autoscale_enabled:
         executor.resize(max(settings.min_workers, min(settings.worker_count, settings.max_workers)))
         tasks.append(asyncio.create_task(_autoscale_workers_loop()))
-    if _use_external_durable_queue():
+    if use_external_durable_queue():
         for consumer_id in range(max(1, settings.queue_consumer_count)):
             tasks.append(asyncio.create_task(_durable_queue_consumer_loop(consumer_id)))
     yield

@@ -1,6 +1,10 @@
 import time
 
+from fastapi.testclient import TestClient
+
+from app.config import settings
 from app.durable_queue import ChunkResultStore, ChunkWriteTask, MemoryDurableQueue
+from app.main import app
 
 
 def test_chunk_task_roundtrip_serialization() -> None:
@@ -42,3 +46,18 @@ def test_result_store_timeout() -> None:
     elapsed = time.time() - start
     assert result is None
     assert elapsed >= 1
+
+
+def test_durable_queue_mode_chunk_put_succeeds_in_process(auth_headers, monkeypatch) -> None:
+    # Regression: the request used to wait for the consumer on the event loop, so the consumer
+    # (same loop) never ran and every chunk timed out with 504.
+    monkeypatch.setattr(settings, "queue_backend", "redis")
+    monkeypatch.setattr(settings, "queue_task_timeout_seconds", 2)
+    monkeypatch.setattr(settings, "queue_poll_timeout_seconds", 1)
+    with TestClient(app) as client:
+        init = client.post(
+            "/v1/uploads/init", json={"file_name": "q.bin", "file_size": 10, "chunk_size": 10}, headers=auth_headers
+        )
+        assert init.status_code == 201, init.text
+        upload_id = init.json()["upload_id"]
+        assert client.put(f"/v1/uploads/{upload_id}/chunks/0", content=b"y" * 10, headers=auth_headers).status_code == 202

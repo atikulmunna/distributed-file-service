@@ -1,0 +1,170 @@
+"""The chunk upload pipeline: prepare (validate), persist (storage write), record (DB).
+
+Every function here is synchronous and blocking. The route runs them off the event loop,
+and each DB step uses its own short session, so no connection is held while a request waits
+on the network or on object storage.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import time
+from dataclasses import dataclass
+
+from fastapi import HTTPException
+from sqlalchemy import select
+
+from app.auth import AuthUser
+from app.config import settings
+from app.db import SessionLocal
+from app.durable_queue import ChunkResultStore, ChunkWriteTask, build_durable_queue
+from app.metrics import bytes_uploaded_total, chunks_uploaded_total, db_update_latency_seconds, s3_put_latency_seconds
+from app.models import Chunk, ChunkRequestIdempotency, ChunkStatus, Upload, UploadStatus
+from app.schemas import UploadChunkResponse
+from app.storage import StorageWriteResult, storage
+from app.upload_access import get_owned_upload
+
+durable_queue = build_durable_queue()
+chunk_result_store = ChunkResultStore()
+
+
+def use_external_durable_queue() -> bool:
+    return settings.queue_backend.lower() in ("redis", "sqs")
+
+
+@dataclass(frozen=True)
+class ChunkPlan:
+    upload_id: str
+    chunk_index: int
+    multipart_upload_id: str | None
+    size: int
+    sha256: str
+
+
+def prepare_chunk(
+    upload_id: str,
+    chunk_index: int,
+    body: bytes,
+    claimed_sha256: str | None,
+    idempotency_key: str | None,
+    user: AuthUser,
+    declared_length: int = 0,
+) -> ChunkPlan | UploadChunkResponse:
+    """Validate a chunk request. Returns the stored response for an idempotent replay."""
+    with SessionLocal() as db:
+        upload = get_owned_upload(db, upload_id, user)
+        if upload.status not in (UploadStatus.in_progress.value, UploadStatus.initiated.value):
+            raise HTTPException(status_code=409, detail="upload is not accepting chunks")
+        if chunk_index < 0 or chunk_index >= upload.total_chunks:
+            raise HTTPException(status_code=400, detail="chunk index out of bounds")
+        if not body:
+            raise HTTPException(status_code=400, detail="chunk payload is empty")
+        if declared_length and declared_length != len(body):
+            raise HTTPException(status_code=400, detail="content-length mismatch")
+
+        chunk_fingerprint = hashlib.sha256(body).hexdigest()
+        if claimed_sha256 and claimed_sha256.lower() != chunk_fingerprint:
+            raise HTTPException(status_code=400, detail="chunk checksum mismatch")
+        if idempotency_key:
+            existing_request = db.scalar(
+                select(ChunkRequestIdempotency).where(
+                    ChunkRequestIdempotency.upload_id == upload_id,
+                    ChunkRequestIdempotency.chunk_index == chunk_index,
+                    ChunkRequestIdempotency.idempotency_key == idempotency_key,
+                )
+            )
+            if existing_request:
+                if existing_request.request_fingerprint != chunk_fingerprint:
+                    raise HTTPException(status_code=409, detail="idempotency key reused with different chunk payload")
+                existing_chunk = db.scalar(
+                    select(Chunk).where(Chunk.upload_id == upload_id, Chunk.chunk_index == chunk_index)
+                )
+                if existing_chunk and existing_chunk.status == ChunkStatus.uploaded.value:
+                    return UploadChunkResponse(upload_id=upload_id, chunk_index=chunk_index, status=existing_chunk.status)
+
+        return ChunkPlan(
+            upload_id=upload_id,
+            chunk_index=chunk_index,
+            multipart_upload_id=upload.multipart_upload_id,
+            size=len(body),
+            sha256=chunk_fingerprint,
+        )
+
+
+def write_to_storage(
+    upload_id: str, chunk_index: int, data: bytes, multipart_upload_id: str | None
+) -> StorageWriteResult:
+    start = time.perf_counter()
+    result = storage.write_chunk(upload_id, chunk_index, data, multipart_upload_id=multipart_upload_id)
+    s3_put_latency_seconds.observe(time.perf_counter() - start)
+    return result
+
+
+def persist_chunk(plan: ChunkPlan, body: bytes) -> StorageWriteResult:
+    """Storage write only; no DB session is open here."""
+    return write_to_storage(plan.upload_id, plan.chunk_index, body, plan.multipart_upload_id)
+
+
+def persist_chunk_via_queue(plan: ChunkPlan, body: bytes) -> StorageWriteResult:
+    """Hand the write to the durable queue consumer and wait for its result (blocking)."""
+    task = ChunkWriteTask.from_bytes(
+        upload_id=plan.upload_id,
+        chunk_index=plan.chunk_index,
+        data=body,
+        multipart_upload_id=plan.multipart_upload_id,
+    )
+    durable_queue.enqueue(task)
+    outcome = chunk_result_store.wait(task.task_id, timeout_seconds=settings.queue_task_timeout_seconds)
+    if outcome is None:
+        raise HTTPException(status_code=504, detail="chunk task timeout while waiting for durable queue result")
+    success, payload = outcome
+    if not success:
+        raise RuntimeError(payload["error"])
+    return StorageWriteResult(key=payload["key"], etag=payload["etag"])
+
+
+def record_chunk(plan: ChunkPlan, result: StorageWriteResult, retries: int, idempotency_key: str | None) -> None:
+    """Write the chunk row (and idempotency row) in one short transaction."""
+    db_t0 = time.perf_counter()
+    with SessionLocal() as db:
+        upload = db.get(Upload, plan.upload_id)
+        if upload is None:
+            raise HTTPException(status_code=404, detail="upload not found")
+        existing = db.scalar(
+            select(Chunk).where(Chunk.upload_id == plan.upload_id, Chunk.chunk_index == plan.chunk_index)
+        )
+        if existing:
+            existing.size_bytes = plan.size
+            existing.chunk_checksum_sha256 = plan.sha256
+            existing.s3_key = result.key
+            existing.s3_etag = result.etag
+            existing.status = ChunkStatus.uploaded.value
+            existing.retry_count = retries
+        else:
+            db.add(
+                Chunk(
+                    upload_id=plan.upload_id,
+                    chunk_index=plan.chunk_index,
+                    size_bytes=plan.size,
+                    chunk_checksum_sha256=plan.sha256,
+                    s3_key=result.key,
+                    s3_etag=result.etag,
+                    status=ChunkStatus.uploaded.value,
+                    retry_count=retries,
+                )
+            )
+        if upload.status == UploadStatus.initiated.value:
+            upload.status = UploadStatus.in_progress.value
+        if idempotency_key:
+            db.add(
+                ChunkRequestIdempotency(
+                    upload_id=plan.upload_id,
+                    chunk_index=plan.chunk_index,
+                    idempotency_key=idempotency_key,
+                    request_fingerprint=plan.sha256,
+                )
+            )
+        db.commit()
+    db_update_latency_seconds.observe(time.perf_counter() - db_t0)
+    chunks_uploaded_total.inc()
+    bytes_uploaded_total.inc(plan.size)
