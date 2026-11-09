@@ -1,0 +1,302 @@
+{
+  "description": "Download throughput A/B for Task 11, W3 (1 x 1 GiB) and W1 (20 x 64 MiB), 3 interleaved rounds each, against the Task 10 code.",
+  "first_design": {
+    "server_code": {
+      "prev": "f743a63 (Task 10)",
+      "new": "c70a22a"
+    },
+    "label": "8 MiB ranged GETs, 4 in flight",
+    "runs": {
+      "W3": {
+        "prev": [
+          {
+            "round": 1,
+            "ok": 1,
+            "verified": 1,
+            "up": 96.529,
+            "down": 146.798,
+            "down_file_ms_p50": 6974.92,
+            "errors": {}
+          },
+          {
+            "round": 2,
+            "ok": 1,
+            "verified": 1,
+            "up": 90.549,
+            "down": 150.945,
+            "down_file_ms_p50": 6783.292,
+            "errors": {}
+          },
+          {
+            "round": 3,
+            "ok": 1,
+            "verified": 1,
+            "up": 96.536,
+            "down": 130.325,
+            "down_file_ms_p50": 7856.645,
+            "errors": {}
+          }
+        ],
+        "new": [
+          {
+            "round": 1,
+            "ok": 1,
+            "verified": 1,
+            "up": 91.102,
+            "down": 132.472,
+            "down_file_ms_p50": 7729.449,
+            "errors": {}
+          },
+          {
+            "round": 2,
+            "ok": 1,
+            "verified": 1,
+            "up": 91.369,
+            "down": 132.285,
+            "down_file_ms_p50": 7740.328,
+            "errors": {}
+          },
+          {
+            "round": 3,
+            "ok": 1,
+            "verified": 1,
+            "up": 81.319,
+            "down": 125.305,
+            "down_file_ms_p50": 8171.642,
+            "errors": {}
+          }
+        ]
+      },
+      "W1": {
+        "prev": [
+          {
+            "round": 1,
+            "ok": 20,
+            "verified": 20,
+            "up": 102.606,
+            "down": 155.307,
+            "down_file_ms_p50": 3232.62,
+            "errors": {}
+          },
+          {
+            "round": 2,
+            "ok": 20,
+            "verified": 20,
+            "up": 73.331,
+            "down": 147.51,
+            "down_file_ms_p50": 3379.848,
+            "errors": {}
+          },
+          {
+            "round": 3,
+            "ok": 20,
+            "verified": 20,
+            "up": 81.357,
+            "down": 146.156,
+            "down_file_ms_p50": 3501.284,
+            "errors": {}
+          }
+        ],
+        "new": [
+          {
+            "round": 1,
+            "ok": 20,
+            "verified": 20,
+            "up": 94.102,
+            "down": 147.277,
+            "down_file_ms_p50": 3600.451,
+            "errors": {}
+          },
+          {
+            "round": 2,
+            "ok": 20,
+            "verified": 20,
+            "up": 88.595,
+            "down": 152.147,
+            "down_file_ms_p50": 3323.868,
+            "errors": {}
+          },
+          {
+            "round": 3,
+            "ok": 20,
+            "verified": 20,
+            "up": 80.676,
+            "down": 134.553,
+            "down_file_ms_p50": 3962.971,
+            "errors": {}
+          }
+        ]
+      }
+    },
+    "median_download_mib_per_s": {
+      "W3": {
+        "prev": 146.798,
+        "new": 132.285
+      },
+      "W1": {
+        "prev": 147.51,
+        "new": 147.277
+      }
+    },
+    "paired_download_diff_new_minus_prev": {
+      "W3": [
+        -14.3,
+        -18.7,
+        -5.0
+      ],
+      "W1": [
+        -8.0,
+        4.6,
+        -11.6
+      ]
+    }
+  },
+  "raw_read_rates_1_gib_object_mib_per_s": {
+    "one streaming GET": 2233,
+    "ranged 8 MiB, prefetch 1": 514,
+    "ranged 8 MiB, prefetch 4": 435,
+    "ranged 8 MiB, prefetch 8": 427,
+    "ranged 32 MiB, prefetch 4": 403,
+    "final default (one streaming ranged GET)": 3877
+  },
+  "final_design": {
+    "server_code": {
+      "prev": "f743a63 (Task 10)",
+      "new": "b316762"
+    },
+    "label": "one streaming ranged GET per piece (download_prefetch 1)",
+    "runs": {
+      "W3": {
+        "prev": [
+          {
+            "round": 1,
+            "ok": 1,
+            "verified": 1,
+            "up": 93.96,
+            "down": 144.606,
+            "errors": {}
+          },
+          {
+            "round": 2,
+            "ok": 1,
+            "verified": 1,
+            "up": 81.504,
+            "down": 141.643,
+            "errors": {}
+          },
+          {
+            "round": 3,
+            "ok": 1,
+            "verified": 1,
+            "up": 70.906,
+            "down": 136.616,
+            "errors": {}
+          }
+        ],
+        "new": [
+          {
+            "round": 1,
+            "ok": 1,
+            "verified": 1,
+            "up": 94.469,
+            "down": 147.672,
+            "errors": {}
+          },
+          {
+            "round": 2,
+            "ok": 1,
+            "verified": 1,
+            "up": 90.103,
+            "down": 143.965,
+            "errors": {}
+          },
+          {
+            "round": 3,
+            "ok": 1,
+            "verified": 1,
+            "up": 76.754,
+            "down": 134.511,
+            "errors": {}
+          }
+        ]
+      },
+      "W1": {
+        "prev": [
+          {
+            "round": 1,
+            "ok": 20,
+            "verified": 20,
+            "up": 89.333,
+            "down": 151.023,
+            "errors": {}
+          },
+          {
+            "round": 2,
+            "ok": 20,
+            "verified": 20,
+            "up": 87.985,
+            "down": 154.381,
+            "errors": {}
+          },
+          {
+            "round": 3,
+            "ok": 20,
+            "verified": 20,
+            "up": 73.617,
+            "down": 152.674,
+            "errors": {}
+          }
+        ],
+        "new": [
+          {
+            "round": 1,
+            "ok": 20,
+            "verified": 20,
+            "up": 94.128,
+            "down": 163.086,
+            "errors": {}
+          },
+          {
+            "round": 2,
+            "ok": 20,
+            "verified": 20,
+            "up": 87.948,
+            "down": 162.26,
+            "errors": {}
+          },
+          {
+            "round": 3,
+            "ok": 20,
+            "verified": 20,
+            "up": 81.684,
+            "down": 159.56,
+            "errors": {}
+          }
+        ]
+      }
+    },
+    "median_download_mib_per_s": {
+      "W3": {
+        "prev": 141.643,
+        "new": 143.965
+      },
+      "W1": {
+        "prev": 152.674,
+        "new": 162.26
+      }
+    },
+    "paired_download_diff_new_minus_prev": {
+      "W3": [
+        3.1,
+        2.3,
+        -2.1
+      ],
+      "W1": [
+        12.1,
+        7.9,
+        6.9
+      ]
+    }
+  },
+  "interpretation": "The first design (parallel 8 MiB ranged GETs) made W3 downloads slower in every round (median 146.8 -> 132.3 MiB/s). On the local stack per-request cost dominates and parallelism adds contention (raw reads above). The final default streams each piece with one ranged GET: W3 downloads at parity (+3.1, +2.3, -2.1 MiB/s) and W1 faster in every round (+12.1, +7.9, +6.9 MiB/s; median 152.7 -> 162.3). All uploads and downloads completed and verified. Parallel ranged reads remain available (download_prefetch > 1) for high-latency storage, to be measured on real S3 in Task 22."
+}
