@@ -147,3 +147,37 @@ def test_health_responsive_during_uploads(client, auth_headers, slow_storage) ->
         thread.join()
     assert health.status_code == 200
     assert latency < 0.2, f"/health took {latency:.2f} s while chunk uploads ran"
+
+
+def test_no_db_connection_held_during_storage_init(client, auth_headers, monkeypatch) -> None:
+    from app.storage import storage
+
+    def slow_initialize_upload(upload_id: str) -> str:
+        time.sleep(0.5)
+        return "mp-test"
+
+    monkeypatch.setattr(settings, "storage_backend", "s3")
+    monkeypatch.setattr(storage, "initialize_upload", slow_initialize_upload)
+    responses: list = []
+    init = threading.Thread(
+        target=lambda: responses.append(
+            client.post(
+                "/v1/uploads/init",
+                # 3 chunks of 5 MiB minimum part size, so the S3 multipart upload is created at init
+                json={"file_name": "mp.bin", "file_size": 12 * 1024 * 1024, "chunk_size": 5 * 1024 * 1024},
+                headers=auth_headers,
+            )
+        )
+    )
+    init.start()
+    time.sleep(0.25)  # CreateMultipartUpload is sleeping now
+    held_during_init = engine.pool.checkedout()
+    init.join()
+
+    assert responses[0].status_code == 201, responses[0].text
+    upload_id = responses[0].json()["upload_id"]
+    with SessionLocal() as db:
+        from app.models import Upload
+
+        assert db.get(Upload, upload_id).multipart_upload_id == "mp-test"
+    assert held_during_init == 0

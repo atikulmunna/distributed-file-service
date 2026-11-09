@@ -4,13 +4,14 @@ import asyncio
 import hashlib
 import json
 import math
+import uuid
 from collections.abc import Iterator
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
-from starlette.concurrency import run_in_threadpool
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 from app.auth import AuthUser, require_api_user
 from app.chunk_service import (
@@ -36,6 +37,7 @@ from app.models import (
     Upload,
     UploadStatus,
 )
+from app.routes import COMMON_ERROR_RESPONSES
 from app.schemas import (
     CompleteUploadResponse,
     ErrorResponse,
@@ -44,7 +46,6 @@ from app.schemas import (
     MissingChunksResponse,
     UploadChunkResponse,
 )
-from app.routes import COMMON_ERROR_RESPONSES
 from app.storage import storage
 from app.upload_access import get_owned_upload
 from app.worker import executor
@@ -103,18 +104,12 @@ def init_upload(
                     status=existing_upload.status,
                 )
 
+    # End the read transaction so no DB connection is held during the storage call below.
+    db.rollback()
+
     total_chunks = math.ceil(payload.file_size / chunk_size)
-    upload = Upload(
-        owner_id=user.user_id,
-        file_name=payload.file_name,
-        file_size=payload.file_size,
-        chunk_size=chunk_size,
-        total_chunks=total_chunks,
-        file_checksum_sha256=payload.file_checksum_sha256.lower() if payload.file_checksum_sha256 else None,
-        status=UploadStatus.initiated.value,
-    )
-    db.add(upload)
-    db.flush()
+    upload_id = str(uuid.uuid4())
+    multipart_upload_id = None
     use_multipart = (
         settings.storage_backend.lower() in ("s3", "r2")
         and total_chunks > 1
@@ -122,10 +117,23 @@ def init_upload(
     )
     if use_multipart:
         try:
-            upload.multipart_upload_id = storage.initialize_upload(upload.id)
+            multipart_upload_id = storage.initialize_upload(upload_id)
         except Exception as exc:
-            db.rollback()
             raise HTTPException(status_code=500, detail=f"failed to initialize upload storage: {exc}") from exc
+
+    upload = Upload(
+        id=upload_id,
+        owner_id=user.user_id,
+        file_name=payload.file_name,
+        file_size=payload.file_size,
+        chunk_size=chunk_size,
+        total_chunks=total_chunks,
+        file_checksum_sha256=payload.file_checksum_sha256.lower() if payload.file_checksum_sha256 else None,
+        status=UploadStatus.initiated.value,
+        multipart_upload_id=multipart_upload_id,
+    )
+    db.add(upload)
+    db.flush()
     if idempotency_key:
         db.add(
             InitRequestIdempotency(
