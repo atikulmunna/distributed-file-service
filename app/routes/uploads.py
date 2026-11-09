@@ -4,7 +4,6 @@ import asyncio
 import hashlib
 import json
 import uuid
-from collections.abc import Iterator
 from functools import partial
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
@@ -25,6 +24,7 @@ from app.chunk_service import (
 )
 from app.config import settings
 from app.db import get_db
+from app.download import content_disposition, iter_pieces, prepare_download
 from app.layout import ChunkLayout
 from app.limits import PerUploadInflightLimiter
 from app.logging_utils import audit_event, request_id_of
@@ -409,51 +409,6 @@ def missing_chunks(
     return MissingChunksResponse(upload_id=upload_id, missing_chunk_indexes=missing, status=upload.status)
 
 
-def _parse_range(range_header: str, file_size: int) -> tuple[int, int]:
-    if not range_header.startswith("bytes="):
-        raise HTTPException(status_code=416, detail="invalid range header")
-    parts = range_header.removeprefix("bytes=").split("-", 1)
-    if len(parts) != 2:
-        raise HTTPException(status_code=416, detail="invalid range format")
-
-    start = int(parts[0]) if parts[0] else 0
-    end = int(parts[1]) if parts[1] else file_size - 1
-    if start < 0 or end < start or end >= file_size:
-        raise HTTPException(status_code=416, detail="range out of bounds")
-    return start, end
-
-
-def _stream_object_range(key: str, start: int, end: int) -> Iterator[bytes]:
-    """Yield bytes start..end (inclusive) of one stored object. Task 11 replaces this with ranged reads."""
-    cursor = 0
-    for block in storage.iter_object(key):
-        next_cursor = cursor + len(block)
-        if next_cursor > start and cursor <= end:
-            yield block[max(0, start - cursor) : min(len(block), end - cursor + 1)]
-        if next_cursor > end:
-            break
-        cursor = next_cursor
-
-
-def _stream_bytes_for_range(chunks: list[Chunk], start: int, end: int) -> Iterator[bytes]:
-    cursor = 0
-    for chunk in chunks:
-        data = storage.read_chunk(chunk.s3_key)
-        next_cursor = cursor + len(data)
-
-        if next_cursor <= start:
-            cursor = next_cursor
-            continue
-        if cursor > end:
-            break
-
-        read_start = max(0, start - cursor)
-        read_end = min(len(data) - 1, end - cursor)
-        if read_start <= read_end:
-            yield data[read_start : read_end + 1]
-        cursor = next_cursor
-
-
 @router.get(
     "/v1/uploads/{upload_id}/download",
     responses={
@@ -468,49 +423,32 @@ def download(
     upload_id: str,
     range: str | None = Header(default=None),
     user: AuthUser = Depends(require_api_user),
-    db: Session = Depends(get_db),
 ) -> Response:
-    upload = get_owned_upload(db, upload_id, user)
-    if upload.status != UploadStatus.completed.value:
-        raise HTTPException(status_code=409, detail="upload is not completed")
-
-    chunks = list(db.scalars(select(Chunk).where(Chunk.upload_id == upload_id).order_by(Chunk.chunk_index)).all())
-    if len(chunks) != upload.total_chunks:
-        raise HTTPException(status_code=500, detail="upload metadata is inconsistent")
-
-    safe_name = upload.file_name.replace('"', "")
+    # Everything needed is read in one short session; no DB connection is held while streaming.
+    plan = prepare_download(upload_id, user, range)
     headers = {
         "Accept-Ranges": "bytes",
-        "Content-Disposition": f'attachment; filename="{safe_name}"',
+        "Content-Disposition": content_disposition(plan.file_name),
+        "Content-Length": str(plan.length),
     }
+    status_code = 200
+    if plan.byte_range:
+        status_code = 206
+        headers["Content-Range"] = f"bytes {plan.byte_range.start}-{plan.byte_range.end}/{plan.file_size}"
     audit_event(
         {
             "event": "audit",
             "action": "download",
             "request_id": request_id_of(request),
-            "upload_id": upload.id,
+            "upload_id": upload_id,
             "user_id": user.user_id,
-            "status": upload.status,
+            "status": UploadStatus.completed.value,
             "range_requested": bool(range),
         }
     )
-    if upload.multipart_upload_id and settings.storage_backend.lower() in ("s3", "r2"):
-        assembled_key = storage.assembled_key(upload.id)
-        stream = lambda start, end: _stream_object_range(assembled_key, start, end)  # noqa: E731
-    else:
-        stream = lambda start, end: _stream_bytes_for_range(chunks, start, end)  # noqa: E731
-    if range:
-        start, end = _parse_range(range, upload.file_size)
-        headers["Content-Range"] = f"bytes {start}-{end}/{upload.file_size}"
-        return StreamingResponse(
-            stream(start, end),
-            status_code=206,
-            media_type="application/octet-stream",
-            headers=headers,
-        )
-
     return StreamingResponse(
-        stream(0, upload.file_size - 1),
+        iter_pieces(plan.pieces, settings.download_segment_bytes, settings.download_prefetch),
+        status_code=status_code,
         media_type="application/octet-stream",
         headers=headers,
     )

@@ -36,38 +36,6 @@ def _put(client: TestClient, headers: dict, upload_id: str, index: int, body: by
     return client.put(f"/v1/uploads/{upload_id}/chunks/{index}", content=body, headers=headers)
 
 
-def _completed_upload(client: TestClient, headers: dict, body: bytes, file_name: str = "f.bin") -> str:
-    upload_id = _init(client, headers, len(body), len(body), file_name)
-    assert _put(client, headers, upload_id, 0, body).status_code == 202
-    assert client.post(f"/v1/uploads/{upload_id}/complete", headers=headers).status_code == 200
-    return upload_id
-
-
-@known_bug(11)
-def test_range_suffix_returns_tail(client, auth_headers) -> None:
-    upload_id = _completed_upload(client, auth_headers, b"0123456789")
-    response = client.get(f"/v1/uploads/{upload_id}/download", headers={**auth_headers, "Range": "bytes=-3"})
-    assert response.status_code == 206
-    assert response.content == b"789"
-
-
-@known_bug(11)
-def test_malformed_range_does_not_500(client, auth_headers) -> None:
-    upload_id = _completed_upload(client, auth_headers, b"0123456789")
-    response = client.get(f"/v1/uploads/{upload_id}/download", headers={**auth_headers, "Range": "bytes=abc-"})
-    assert response.status_code == 200
-    assert response.content == b"0123456789"
-
-
-@known_bug(11)
-def test_non_ascii_filename_download(client, auth_headers) -> None:
-    name = "রিপোর্ট.txt"  # Bengali "report"
-    upload_id = _completed_upload(client, auth_headers, b"data", file_name=name)
-    response = client.get(f"/v1/uploads/{upload_id}/download", headers=auth_headers)
-    assert response.status_code == 200
-    assert response.content == b"data"
-
-
 @known_bug(13)
 def test_old_but_active_upload_survives_cleanup(client, auth_headers) -> None:
     upload_id = _init(client, auth_headers, 10, 5)

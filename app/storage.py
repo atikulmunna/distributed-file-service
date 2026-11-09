@@ -88,6 +88,10 @@ class ChunkStorage:
         """Stream an object in blocks without loading it whole."""
         raise NotImplementedError
 
+    def read_range(self, key: str, start: int, end: int) -> bytes:
+        """Bytes start..end (inclusive) of a stored object."""
+        raise NotImplementedError
+
     def read_chunk(self, s3_key: str) -> bytes:
         raise NotImplementedError
 
@@ -130,6 +134,11 @@ class LocalChunkStorage(ChunkStorage):
         with (self.root / key).open("rb") as handle:
             while block := handle.read(block_size):
                 yield block
+
+    def read_range(self, key: str, start: int, end: int) -> bytes:
+        with (self.root / key).open("rb") as handle:
+            handle.seek(start)
+            return handle.read(end - start + 1)
 
     def list_keys(self, prefix: str = "") -> list[str]:
         base = self.root / prefix if prefix else self.root
@@ -270,6 +279,10 @@ class S3ChunkStorage(ChunkStorage):
     def iter_object(self, key: str, block_size: int = 8 * 1024 * 1024) -> Iterator[bytes]:
         body = self.client.get_object(Bucket=self.bucket, Key=key)["Body"]
         yield from body.iter_chunks(chunk_size=block_size)
+
+    def read_range(self, key: str, start: int, end: int) -> bytes:
+        response = self.client.get_object(Bucket=self.bucket, Key=key, Range=f"bytes={start}-{end}")
+        return response["Body"].read()
 
     def list_keys(self, prefix: str = "") -> list[str]:
         keys: list[str] = []

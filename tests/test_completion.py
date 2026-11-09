@@ -341,12 +341,11 @@ def test_multipart_download_streams_the_assembled_object(client, auth_headers, m
     assert client.post(f"/v1/uploads/{upload_id}/complete", headers=auth_headers).status_code == 200
     read_keys: list[str] = []
 
-    def iter_assembled(key: str, block_size: int = 8 * 1024 * 1024):
+    def read_assembled(key: str, start: int, end: int) -> bytes:
         read_keys.append(key)
-        yield b"aaaaa"
-        yield b"bbbbb"
+        return b"aaaaabbbbb"[start : end + 1]
 
-    monkeypatch.setattr(storage, "iter_object", iter_assembled)
+    monkeypatch.setattr(storage, "read_range", read_assembled)
     monkeypatch.setattr(storage, "read_chunk", lambda key: pytest.fail(f"read a per-chunk object {key}"))
 
     full = client.get(f"/v1/uploads/{upload_id}/download", headers=auth_headers)

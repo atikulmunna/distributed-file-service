@@ -47,6 +47,10 @@ class Settings(BaseSettings):
     chunk_body_timeout_seconds: int = 60
     # A COMPLETING upload whose claim is older than this may be taken over by another complete request.
     completion_lease_seconds: int = 60
+    # Downloads read stored objects in ranged segments of this size, with up to download_prefetch
+    # segments in flight per download (memory per download: about (prefetch + 1) segments).
+    download_segment_bytes: int = 8 * 1024 * 1024
+    download_prefetch: int = 4
     max_retries: int = 3  # retries after the first attempt, for transient storage errors only
     retry_base_delay_ms: int = 100
     retry_max_delay_ms: int = 2000

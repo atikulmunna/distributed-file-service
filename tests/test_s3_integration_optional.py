@@ -9,20 +9,19 @@ SSE is not covered here (Versity does not implement it); the fake-client unit te
 
 import hashlib
 import os
+import sys
 from datetime import datetime, timedelta, timezone
 
 import pytest
 from botocore.exceptions import ClientError
 from sqlalchemy import update
 
-import app.chunk_service as chunk_service
-import app.maintenance as maintenance
-import app.routes.uploads as upload_routes
-import app.upload_lifecycle as upload_lifecycle
+import app.main  # noqa: F401  (imports every module that uses storage)
 from app.config import settings
 from app.db import SessionLocal
 from app.models import Upload
 from app.storage import S3ChunkStorage
+from app.storage import storage as default_storage
 from scripts.bench_init import ensure_bucket
 
 ENDPOINT = os.getenv("S3_INTEGRATION_ENDPOINT_URL", "")
@@ -50,8 +49,14 @@ def s3() -> S3ChunkStorage:
 def s3_backend(monkeypatch, s3):
     """Point the running app at the real S3 endpoint (the test harness defaults to local storage)."""
     monkeypatch.setattr(settings, "storage_backend", "s3")
-    for module in (upload_routes, chunk_service, upload_lifecycle, maintenance):
-        monkeypatch.setattr(module, "storage", s3)
+    # Every app module that imported the default storage object gets the S3 one, so a new module
+    # cannot silently keep reading local disk.
+    swapped = []
+    for name, module in list(sys.modules.items()):
+        if name.startswith("app.") and getattr(module, "storage", None) is default_storage:
+            monkeypatch.setattr(module, "storage", s3)
+            swapped.append(name)
+    assert "app.download" in swapped and "app.chunk_service" in swapped, swapped
     return s3
 
 
