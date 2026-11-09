@@ -17,13 +17,11 @@ from app.auth import AuthUser, require_api_user
 from app.chunk_service import (
     admit_chunk,
     persist_chunk,
-    persist_chunk_via_queue,
     prepare_chunk,
     record_chunk,
-    use_external_durable_queue,
 )
 from app.config import settings
-from app.db import get_db
+from app.db import SessionLocal, get_db
 from app.download import content_disposition, iter_pieces, prepare_download
 from app.layout import ChunkLayout
 from app.limits import PerUploadInflightLimiter
@@ -285,12 +283,8 @@ async def upload_chunk(
             retries_total.inc()
 
         # Retries (transient storage errors only, with backoff) run inside the storage worker thread.
-        if use_external_durable_queue():
-            write = partial(with_storage_retries, partial(persist_chunk_via_queue, plan, body), "chunk write", count_retry)
-            pending = run_in_threadpool(write)
-        else:
-            write = partial(with_storage_retries, partial(persist_chunk, plan, body), "chunk write", count_retry)
-            pending = asyncio.wrap_future(executor.submit(write))
+        write = partial(with_storage_retries, partial(persist_chunk, plan, body), "chunk write", count_retry)
+        pending = asyncio.wrap_future(executor.submit(write))
         try:
             result = await pending
         except HTTPException as exc:
@@ -310,12 +304,14 @@ async def upload_chunk(
     response_model=CompleteUploadResponse,
     responses={
         **COMMON_ERROR_RESPONSES,
+        202: {"model": CompleteUploadResponse, "description": "Accepted: whole-file checksum verification in progress (VERIFYING)"},
         404: {"model": ErrorResponse, "description": "Upload not found"},
         409: {"model": ErrorResponse, "description": "State/idempotency conflict"},
     },
 )
 def complete_upload(
     request: Request,
+    response: Response,
     upload_id: str,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     user: AuthUser = Depends(require_api_user),
@@ -335,6 +331,8 @@ def complete_upload(
                     "idempotent_replay": True,
                 }
             )
+        if claimed.response.status == UploadStatus.verifying.value:
+            response.status_code = 202
         return claimed.response
 
     try:
@@ -342,7 +340,9 @@ def complete_upload(
     except Exception:
         release_claim(upload_id)  # storage did not finish: let the client fix the problem and retry
         raise
-    status = finish_completion(upload_id, idempotency_key, fingerprint)
+    status = finish_completion(upload_id, idempotency_key, fingerprint, verify=bool(claimed.file_checksum_sha256))
+    if status == UploadStatus.verifying.value:
+        response.status_code = 202  # accepted: the whole-file checksum is being verified
     audit_event(
         {
             "event": "audit",
@@ -355,6 +355,18 @@ def complete_upload(
         }
     )
     return CompleteUploadResponse(upload_id=upload_id, status=status)
+
+
+@router.get(
+    "/v1/uploads/{upload_id}",
+    response_model=UploadStatusResponse,
+    responses={**COMMON_ERROR_RESPONSES, 404: {"model": ErrorResponse, "description": "Upload not found"}},
+)
+def upload_status(upload_id: str, user: AuthUser = Depends(require_api_user)) -> UploadStatusResponse:
+    """Current status of an upload. Poll it after a 202 VERIFYING from complete."""
+    with SessionLocal() as db:
+        upload = get_owned_upload(db, upload_id, user)
+        return UploadStatusResponse(upload_id=upload.id, status=upload.status, failure_reason=upload.failure_reason)
 
 
 @router.delete(

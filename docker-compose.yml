@@ -44,9 +44,35 @@ services:
       STORAGE_ROOT: /app/data
       QUEUE_BACKEND: ${QUEUE_BACKEND:-memory}
       REDIS_URL: redis://redis:6379/0
-      REDIS_QUEUE_NAME: dfs-chunk-tasks
+      REDIS_STREAM_NAME: dfs:finalize
+      # With QUEUE_BACKEND=redis, set FINALIZER_IN_PROCESS=false and run the "workers" profile.
+      FINALIZER_IN_PROCESS: ${FINALIZER_IN_PROCESS:-true}
     ports:
       - "8000:8000"
+    volumes:
+      - app_data:/app/data
+
+  # Verification workers as their own service (whole-file checksum checks after complete):
+  # QUEUE_BACKEND=redis FINALIZER_IN_PROCESS=false docker compose --profile workers up -d
+  finalizer:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    profiles: ["workers"]
+    command: ["python", "-m", "app.finalizer"]
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://dfs:dfs@db:5432/dfs
+      STORAGE_ROOT: /app/data
+      QUEUE_BACKEND: redis
+      REDIS_URL: redis://redis:6379/0
+      REDIS_STREAM_NAME: dfs:finalize
     volumes:
       - app_data:/app/data
 

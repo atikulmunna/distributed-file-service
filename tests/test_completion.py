@@ -145,15 +145,6 @@ def test_failed_storage_completion_releases_the_claim(client, auth_headers, monk
     assert _status(upload_id) == "IN_PROGRESS"  # the client can retry immediately
 
 
-def test_checksum_mismatch_releases_the_claim(client, auth_headers) -> None:
-    upload_id = _new_upload(client, auth_headers, 10, 5, file_checksum_sha256=hashlib.sha256(b"something else").hexdigest())
-    _upload_chunks(client, auth_headers, upload_id, b"aaaaabbbbb", 5)
-    response = client.post(f"/v1/uploads/{upload_id}/complete", headers=auth_headers)
-    assert response.status_code == 409
-    assert response.json()["detail"] == "file checksum mismatch"
-    assert _status(upload_id) == "IN_PROGRESS"
-
-
 def test_empty_file_round_trip(client, auth_headers) -> None:
     upload_id = _new_upload(client, auth_headers, 0, 5)
     complete = client.post(f"/v1/uploads/{upload_id}/complete", headers=auth_headers)
@@ -188,23 +179,20 @@ def test_complete_releases_db_connection_during_storage_work(client, auth_header
 def test_concurrent_completes_with_slow_storage_exceeding_db_pool_succeed(
     live_server, small_pool, auth_headers, monkeypatch
 ) -> None:
-    """Regression for the intermittent W2 failures: many completes whose storage work is slow."""
+    """Regression for the intermittent W2 failures: many completes whose storage work (the S3
+    multipart completion) is slow must not hold DB connections while waiting on it."""
     uploads = 10
     data = b"aaaaabbbbb"
-    real_read = storage.read_chunk
 
-    def slow_read(key: str) -> bytes:  # whole-file checksum verification reads every chunk
+    def slow_complete(**kwargs) -> None:
         time.sleep(0.5)
-        return real_read(key)
 
-    monkeypatch.setattr(storage, "read_chunk", slow_read)
+    monkeypatch.setattr(storage, "complete_upload", slow_complete)
     with httpx.Client(base_url=live_server, timeout=30.0, limits=httpx.Limits(max_connections=uploads + 5)) as http:
-        ids = [
-            _new_upload(http, auth_headers, 10, 5, file_checksum_sha256=hashlib.sha256(data).hexdigest())
-            for _ in range(uploads)
-        ]
+        ids = [_new_upload(http, auth_headers, 10, 5) for _ in range(uploads)]
         for upload_id in ids:
             _upload_chunks(http, auth_headers, upload_id, data, 5)
+            _as_multipart(upload_id, monkeypatch)
         statuses: list[int] = []
 
         def complete(upload_id: str) -> None:
@@ -275,7 +263,6 @@ def test_storage_object_exists_local() -> None:
     assert storage.object_exists("uploads/missing/chunk_0") is False
 
 
-
 # ---------------------------------------------------------------- multipart: one write per chunk
 
 
@@ -298,41 +285,6 @@ def test_complete_sends_part_checksums(client, auth_headers, monkeypatch) -> Non
             {"PartNumber": 2, "ETag": '"etag"', "ChecksumSHA256": _b64_sha256(b"bbbbb")},
         ]
     ]
-
-
-def _multipart_with_file_checksum(client, headers, monkeypatch, assembled: bytes) -> tuple[str, list[str]]:
-    data = b"aaaaabbbbb"
-    upload_id = _new_upload(client, headers, 10, 5, file_checksum_sha256=hashlib.sha256(data).hexdigest())
-    _upload_chunks(client, headers, upload_id, data, 5)
-    _as_multipart(upload_id, monkeypatch)
-    read_keys: list[str] = []
-    monkeypatch.setattr(storage, "complete_upload", lambda **kwargs: None)
-
-    def iter_assembled(key: str, block_size: int = 8 * 1024 * 1024):
-        read_keys.append(key)
-        yield assembled
-
-    monkeypatch.setattr(storage, "iter_object", iter_assembled)
-    return upload_id, read_keys
-
-
-def test_multipart_checksum_verified_on_the_assembled_object(client, auth_headers, monkeypatch) -> None:
-    upload_id, read_keys = _multipart_with_file_checksum(client, auth_headers, monkeypatch, assembled=b"aaaaabbbbb")
-    response = client.post(f"/v1/uploads/{upload_id}/complete", headers=auth_headers)
-    assert response.status_code == 200, response.text
-    assert read_keys == [f"uploads/{upload_id}/assembled"]
-    assert _status(upload_id) == "COMPLETED"
-
-
-def test_multipart_checksum_mismatch_after_assembly_fails_the_upload(client, auth_headers, monkeypatch) -> None:
-    upload_id, _ = _multipart_with_file_checksum(client, auth_headers, monkeypatch, assembled=b"tampered!!")
-    response = client.post(f"/v1/uploads/{upload_id}/complete", headers=auth_headers)
-    assert response.status_code == 409
-    assert response.json()["detail"] == "file checksum mismatch"
-    with SessionLocal() as db:
-        upload = db.get(Upload, upload_id)
-        assert upload.status == "FAILED"  # the parts are consumed, so re-uploading cannot fix it
-        assert upload.failure_reason.startswith("file checksum mismatch: expected ")
 
 
 def test_multipart_download_streams_the_assembled_object(client, auth_headers, monkeypatch) -> None:

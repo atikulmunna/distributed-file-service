@@ -16,9 +16,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.auth import AuthUser
-from app.config import settings
 from app.db import SessionLocal, dialect_insert
-from app.durable_queue import ChunkResultStore, ChunkWriteTask, build_durable_queue
 from app.layout import ChunkLayout
 from app.metrics import (
     bytes_uploaded_total,
@@ -37,13 +35,6 @@ from app.models import (
 from app.schemas import UploadChunkResponse
 from app.storage import StorageWriteResult, storage
 from app.upload_access import get_owned_upload
-
-durable_queue = build_durable_queue()
-chunk_result_store = ChunkResultStore()
-
-
-def use_external_durable_queue() -> bool:
-    return settings.queue_backend.lower() in ("redis", "sqs")
 
 
 @dataclass(frozen=True)
@@ -132,24 +123,6 @@ def write_to_storage(
 def persist_chunk(plan: ChunkPlan, body: bytes) -> StorageWriteResult:
     """Storage write only; no DB session is open here."""
     return write_to_storage(plan.upload_id, plan.chunk_index, body, plan.multipart_upload_id, sha256_hex=plan.sha256)
-
-
-def persist_chunk_via_queue(plan: ChunkPlan, body: bytes) -> StorageWriteResult:
-    """Hand the write to the durable queue consumer and wait for its result (blocking)."""
-    task = ChunkWriteTask.from_bytes(
-        upload_id=plan.upload_id,
-        chunk_index=plan.chunk_index,
-        data=body,
-        multipart_upload_id=plan.multipart_upload_id,
-    )
-    durable_queue.enqueue(task)
-    outcome = chunk_result_store.wait(task.task_id, timeout_seconds=settings.queue_task_timeout_seconds)
-    if outcome is None:
-        raise HTTPException(status_code=504, detail="chunk task timeout while waiting for durable queue result")
-    success, payload = outcome
-    if not success:
-        raise RuntimeError(payload["error"])
-    return StorageWriteResult(key=payload["key"], etag=payload["etag"])
 
 
 CHUNK_UPSERT_COLUMNS = ("size_bytes", "chunk_checksum_sha256", "s3_key", "s3_etag", "status", "retry_count", "updated_at")

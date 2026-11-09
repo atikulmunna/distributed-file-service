@@ -72,6 +72,8 @@ def object_pieces(upload: Upload, chunks: list[Chunk], layout: ChunkLayout, star
 def prepare_download(upload_id: str, user: AuthUser, range_header: str | None) -> DownloadPlan:
     with SessionLocal() as db:
         upload = get_owned_upload(db, upload_id, user)
+        if upload.status == UploadStatus.verifying.value:
+            raise HTTPException(status_code=409, detail="verification in progress")
         if upload.status != UploadStatus.completed.value:
             raise HTTPException(status_code=409, detail="upload is not completed")
         chunks = list(db.scalars(select(Chunk).where(Chunk.upload_id == upload_id).order_by(Chunk.chunk_index)))

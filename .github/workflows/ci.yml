@@ -120,3 +120,39 @@ jobs:
 
       - name: Run S3 integration tests
         run: pytest -q tests/test_s3_integration_optional.py
+
+  redis-jobs:
+    # Job queue semantics (Redis Streams, consumer group, lease takeover) on a real Redis.
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      RUN_REDIS_INTEGRATION: "1"
+      REDIS_URL: redis://localhost:6379/0
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements*.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      - name: Run Redis job queue integration tests
+        run: pytest -q tests/test_redis_jobs_integration_optional.py
+

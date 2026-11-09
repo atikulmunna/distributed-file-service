@@ -36,6 +36,8 @@ os.environ.update(
         "AUTOSCALE_ENABLED": "false",
         "TRACING_ENABLED": "false",
         "API_RATE_LIMIT_PER_MINUTE": "0",
+        # Tests drive verification explicitly; the end-to-end test turns the in-process worker on.
+        "FINALIZER_IN_PROCESS": "false",
     }
 )
 
@@ -53,6 +55,7 @@ from app import models  # noqa: E402,F401  (registers tables on Base.metadata)
 from app.auth import api_key_rate_limiter  # noqa: E402
 from app.config import settings  # noqa: E402
 from app.db import Base, SessionLocal, engine  # noqa: E402
+from app.jobs import job_queue  # noqa: E402
 from app.main import app  # noqa: E402
 from app.storage import storage  # noqa: E402
 
@@ -81,6 +84,7 @@ def _clean_state():
     shutil.rmtree(STORAGE_ROOT, ignore_errors=True)
     STORAGE_ROOT.mkdir(parents=True, exist_ok=True)
     api_key_rate_limiter.reset()
+    job_queue.clear()
     yield
 
 

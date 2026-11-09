@@ -14,6 +14,8 @@ worker_busy_count = Gauge("worker_busy_count", "Approximate busy workers")
 
 s3_put_latency_seconds = Histogram("s3_put_latency_seconds", "Chunk storage write latency in seconds")
 db_update_latency_seconds = Histogram("db_update_latency_seconds", "DB update latency in seconds")
+finalize_jobs_total = Counter("finalize_jobs_total", "Verification jobs by outcome", ["outcome"])
+finalize_duration_seconds = Histogram("finalize_duration_seconds", "Whole-file verification time in seconds")
 http_request_duration_seconds = Histogram(
     "http_request_duration_seconds",
     "HTTP request latency in seconds",

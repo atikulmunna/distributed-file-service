@@ -4,6 +4,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.db import SessionLocal, engine
+from app.finalizer import process
+from app.jobs import FinalizeJob
 from app.main import app, upload_limiter
 from app.models import Chunk, ChunkRequestIdempotency, CompleteRequestIdempotency, Upload
 from app.worker import executor
@@ -333,8 +335,10 @@ def test_file_checksum_validated_on_complete_success() -> None:
         assert second.status_code == 202
 
         complete = client.post(f"/v1/uploads/{upload_id}/complete")
-        assert complete.status_code == 200
-        assert complete.json()["status"] == "COMPLETED"
+        assert complete.status_code == 202
+        assert complete.json()["status"] == "VERIFYING"
+        process(FinalizeJob(upload_id))  # the verification worker
+        assert client.get(f"/v1/uploads/{upload_id}").json()["status"] == "COMPLETED"
 
 
 def test_file_checksum_validated_on_complete_mismatch() -> None:
@@ -363,8 +367,11 @@ def test_file_checksum_validated_on_complete_mismatch() -> None:
         assert second.status_code == 202
 
         complete = client.post(f"/v1/uploads/{upload_id}/complete")
-        assert complete.status_code == 409
-        assert "checksum mismatch" in complete.text
+        assert complete.status_code == 202
+        process(FinalizeJob(upload_id))  # the verification worker
+        status = client.get(f"/v1/uploads/{upload_id}").json()
+        assert status["status"] == "FAILED"
+        assert "checksum mismatch" in status["failure_reason"]
 
 
 @pytest.mark.skipif(engine.dialect.name != "postgresql", reason="32-bit INTEGER overflow only exists on Postgres")

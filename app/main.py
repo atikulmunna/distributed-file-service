@@ -1,4 +1,5 @@
 import asyncio
+import threading
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -6,14 +7,10 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from app.chunk_service import (
-    chunk_result_store,
-    durable_queue,
-    use_external_durable_queue,
-    write_to_storage,
-)
 from app.config import settings
 from app.db import SessionLocal
+from app.finalizer import start_workers
+from app.jobs import job_queue
 from app.logging_utils import current_trace_id, log_event, request_id_of
 from app.maintenance import cleanup_once
 from app.metrics import http_request_duration_seconds
@@ -76,56 +73,22 @@ async def lifespan(_: FastAPI):
             except asyncio.TimeoutError:
                 pass
 
-    def _process_queue_message(message) -> None:
-        try:
-            result = write_to_storage(
-                upload_id=message.task.upload_id,
-                chunk_index=message.task.chunk_index,
-                data=message.task.data(),
-                multipart_upload_id=message.task.multipart_upload_id,
-            )
-            chunk_result_store.set_success(message.task.task_id, key=result.key, etag=result.etag)
-            durable_queue.ack(message.receipt)
-        except Exception as exc:
-            chunk_result_store.set_error(message.task.task_id, error=str(exc))
-            try:
-                durable_queue.ack(message.receipt)
-            except Exception:
-                pass
-
-    async def _durable_queue_consumer_loop(consumer_id: int) -> None:
-        while not stop_event.is_set():
-            try:
-                message = await asyncio.to_thread(durable_queue.dequeue, settings.queue_poll_timeout_seconds)
-                if message is None:
-                    continue
-                await asyncio.to_thread(_process_queue_message, message)
-            except Exception as exc:
-                log_event(
-                    {
-                        "event": "queue_consumer_error",
-                        "consumer_id": consumer_id,
-                        "detail": str(exc),
-                        "error_class": "queue_error",
-                    }
-                )
-                try:
-                    await asyncio.wait_for(stop_event.wait(), timeout=1)
-                except asyncio.TimeoutError:
-                    pass
-
     if settings.cleanup_enabled:
         tasks.append(asyncio.create_task(_periodic_cleanup_loop()))
     if settings.autoscale_enabled:
         executor.resize(max(settings.min_workers, min(settings.worker_count, settings.max_workers)))
         tasks.append(asyncio.create_task(_autoscale_workers_loop()))
-    if use_external_durable_queue():
-        for consumer_id in range(max(1, settings.queue_consumer_count)):
-            tasks.append(asyncio.create_task(_durable_queue_consumer_loop(consumer_id)))
+    worker_stop = threading.Event()
+    workers = []
+    if settings.finalizer_in_process:
+        workers = start_workers(job_queue, settings.finalizer_concurrency, worker_stop, poll_timeout_s=0.5)
     yield
     stop_event.set()
+    worker_stop.set()
     for task in tasks:
         await task
+    for worker in workers:
+        await asyncio.to_thread(worker.join, 5)
 
 
 app = FastAPI(title=settings.app_name, lifespan=lifespan)

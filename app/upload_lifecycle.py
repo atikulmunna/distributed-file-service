@@ -3,8 +3,9 @@
 Completion runs in three phases so that no DB connection is held during storage work:
   1. claim (short transaction): move IN_PROGRESS to COMPLETING with a conditional UPDATE (only one
      concurrent request can win), then read and validate the chunk list under that claim;
-  2. storage work (no DB connection): verify the whole-file checksum, complete the multipart upload;
-  3. finish (short transaction): COMPLETING to COMPLETED.
+  2. storage work (no DB connection): complete the multipart upload;
+  3. finish (short transaction): COMPLETING to COMPLETED, or to VERIFYING when the client declared a
+     whole-file checksum; a verification job then checks it asynchronously (app/finalizer.py).
 If storage work fails, the claim is released back to IN_PROGRESS so the client can retry. If the
 process dies after storage work but before finishing, the upload stays COMPLETING until its lease
 (completion_lease_seconds) expires; another complete request may then take it over, and treats an
@@ -14,7 +15,6 @@ already assembled object as success.
 from __future__ import annotations
 
 import base64
-import hashlib
 from dataclasses import dataclass, field
 from datetime import timedelta
 
@@ -24,6 +24,7 @@ from sqlalchemy import select
 from app.auth import AuthUser
 from app.config import settings
 from app.db import SessionLocal, dialect_insert
+from app.jobs import FinalizeJob, job_queue
 from app.logging_utils import log_event
 from app.models import (
     Chunk,
@@ -54,7 +55,7 @@ class CompletionWork:
 @dataclass(frozen=True)
 class CompletionReplay:
     response: CompleteUploadResponse
-    already_completed: bool  # True when the upload was already COMPLETED (audited as a replay)
+    already_completed: bool  # True when the upload was already COMPLETED or VERIFYING (audited as a replay)
 
 
 def _record_complete_key(db, idempotency_key: str, upload_id: str, fingerprint: str) -> None:
@@ -77,7 +78,7 @@ def claim_completion(
                 return CompletionReplay(CompleteUploadResponse(upload_id=upload_id, status=upload.status), False)
 
         status = upload.status
-        if status == UploadStatus.completed.value:
+        if status in (UploadStatus.completed.value, UploadStatus.verifying.value):
             if idempotency_key:
                 _record_complete_key(db, idempotency_key, upload_id, fingerprint)
                 db.commit()
@@ -139,19 +140,6 @@ def _part(chunk: Chunk) -> dict:
     return part
 
 
-def _sha256_of_object(key: str) -> str:
-    digest = hashlib.sha256()
-    for block in storage.iter_object(key):
-        digest.update(block)
-    return digest.hexdigest()
-
-
-def _fail_upload(upload_id: str, reason: str) -> None:
-    with SessionLocal() as db:
-        transition(db, upload_id, {UploadStatus.completing}, UploadStatus.failed, failure_reason=reason)
-        db.commit()
-
-
 def _assembled(upload_id: str) -> bool:
     try:
         return storage.object_exists(storage.assembled_key(upload_id))
@@ -160,18 +148,8 @@ def _assembled(upload_id: str) -> bool:
 
 
 def run_storage_work(work: CompletionWork) -> None:
-    """Verify the whole-file checksum and complete the multipart upload. No DB connection is held.
-
-    Plain chunk objects are verified before completing, so a mismatch leaves the upload fixable. Multipart
-    parts cannot be read back until S3 assembles them, so they are verified on the assembled object; a
-    mismatch then marks the upload FAILED (its parts are consumed).
-    """
-    if work.file_checksum_sha256 and not work.multipart_upload_id:
-        digest = hashlib.sha256()
-        for key in work.chunk_keys:
-            digest.update(with_storage_retries(lambda key=key: storage.read_chunk(key), "checksum verification"))
-        if digest.hexdigest() != work.file_checksum_sha256:
-            raise HTTPException(status_code=409, detail="file checksum mismatch")
+    """Complete the multipart upload, if any. No DB connection is held. Whole-file checksum
+    verification is asynchronous (app/finalizer.py), so it is not done here."""
     if work.multipart_upload_id:
         try:
             with_storage_retries(
@@ -186,14 +164,6 @@ def run_storage_work(work: CompletionWork) -> None:
             # whether the assembled object exists, not by the error code.
             if not _assembled(work.upload_id):
                 raise
-        if work.file_checksum_sha256:
-            key = storage.assembled_key(work.upload_id)
-            actual = with_storage_retries(lambda: _sha256_of_object(key), "checksum verification")
-            if actual != work.file_checksum_sha256:
-                _fail_upload(
-                    work.upload_id, f"file checksum mismatch: expected {work.file_checksum_sha256}, got {actual}"
-                )
-                raise HTTPException(status_code=409, detail="file checksum mismatch")
 
 
 def release_claim(upload_id: str) -> None:
@@ -202,17 +172,26 @@ def release_claim(upload_id: str) -> None:
         db.commit()
 
 
-def finish_completion(upload_id: str, idempotency_key: str | None, fingerprint: str) -> str:
+def finish_completion(upload_id: str, idempotency_key: str | None, fingerprint: str, verify: bool) -> str:
+    """COMPLETING to COMPLETED, or to VERIFYING when a whole-file checksum must be checked first.
+    For VERIFYING, the job is enqueued after the commit; if the enqueue fails, the verification
+    sweep (app/finalizer.py) re-enqueues it after a lease."""
+    target = UploadStatus.verifying if verify else UploadStatus.completed
     with SessionLocal() as db:
-        finished = transition(db, upload_id, {UploadStatus.completing}, UploadStatus.completed)
+        finished = transition(db, upload_id, {UploadStatus.completing}, target)
         if idempotency_key:
             _record_complete_key(db, idempotency_key, upload_id, fingerprint)
         db.commit()
     if finished:
-        return UploadStatus.completed.value
+        if verify:
+            try:
+                job_queue.enqueue(FinalizeJob(upload_id))
+            except Exception as exc:
+                log_event({"event": "verification_enqueue_error", "upload_id": upload_id, "detail": str(exc)})
+        return target.value
     with SessionLocal() as db:
         status = db.scalar(select(Upload.status).where(Upload.id == upload_id))
-    if status == UploadStatus.completed.value:  # a lease-holder finished it first
+    if status in (UploadStatus.completed.value, UploadStatus.verifying.value):  # a lease-holder finished it first
         return status
     raise HTTPException(status_code=409, detail=f"upload changed to {status} during completion")
 

@@ -26,6 +26,7 @@ EXPECTED_API_SURFACE = [
     ("/v1/admin/cleanup", "POST"),
     ("/v1/uploads/init", "POST"),
     ("/v1/uploads/{upload_id}", "DELETE"),
+    ("/v1/uploads/{upload_id}", "GET"),
     ("/v1/uploads/{upload_id}/chunks/{chunk_index}", "PUT"),
     ("/v1/uploads/{upload_id}/complete", "POST"),
     ("/v1/uploads/{upload_id}/download", "GET"),

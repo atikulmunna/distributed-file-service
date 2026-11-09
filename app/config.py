@@ -70,12 +70,20 @@ class Settings(BaseSettings):
     scale_up_queue_threshold: int = 1
     scale_up_utilization_threshold: float = 0.8
     scale_down_utilization_threshold: float = 0.2
+    # Job queue for post-completion verification: "memory" (in-process), "redis" (Streams), or "sqs".
     queue_backend: str = "memory"
-    queue_consumer_count: int = 4
     queue_poll_timeout_seconds: int = 5
-    queue_task_timeout_seconds: int = 45
     redis_url: str = "redis://localhost:6379/0"
-    redis_queue_name: str = "dfs-chunk-tasks"
+    redis_stream_name: str = "dfs:finalize"
+    # A reserved job not acked within the lease is delivered again (its worker is presumed dead).
+    job_lease_seconds: int = 300
+    # Run verification workers inside the API process (needed for the memory queue), or not when
+    # `python -m app.finalizer` runs them as a separate service.
+    finalizer_in_process: bool = True
+    finalizer_concurrency: int = 2
+    finalizer_max_attempts: int = 5
+    # How often a worker re-enqueues uploads stuck in VERIFYING (their job was lost).
+    verification_sweep_seconds: int = 60
     sqs_queue_url: str = ""
     cleanup_enabled: bool = False
     cleanup_interval_seconds: int = 900
