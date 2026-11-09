@@ -14,6 +14,8 @@ worker_busy_count = Gauge("worker_busy_count", "Approximate busy workers")
 
 s3_put_latency_seconds = Histogram("s3_put_latency_seconds", "Chunk storage write latency in seconds")
 db_update_latency_seconds = Histogram("db_update_latency_seconds", "DB update latency in seconds")
+cleanup_errors_total = Counter("cleanup_errors_total", "Cleanup errors by step", ["step"])
+uploads_stuck_verifying = Gauge("uploads_stuck_verifying", "VERIFYING uploads inactive longer than the stale TTL")
 finalize_jobs_total = Counter("finalize_jobs_total", "Verification jobs by outcome", ["outcome"])
 finalize_duration_seconds = Histogram("finalize_duration_seconds", "Whole-file verification time in seconds")
 http_request_duration_seconds = Histogram(

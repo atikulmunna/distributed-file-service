@@ -2,6 +2,7 @@ import base64
 import hashlib
 from collections.abc import Iterator
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 from app.config import settings
@@ -44,6 +45,12 @@ def is_transient_storage_error(exc: Exception) -> bool:
         return code in TRANSIENT_ERROR_CODES or status in TRANSIENT_HTTP_STATUSES
     # ConnectionError covers EndpointConnectionError and ConnectTimeoutError; the others are listed explicitly.
     return isinstance(exc, (ConnectionError, EndpointConnectionError, ConnectionClosedError, ReadTimeoutError))
+
+
+@dataclass(frozen=True)
+class StoredObject:
+    key: str
+    last_modified: datetime
 
 
 @dataclass(frozen=True)
@@ -102,6 +109,10 @@ class ChunkStorage:
     def list_keys(self, prefix: str = "") -> list[str]:
         raise NotImplementedError
 
+    def list_objects(self, prefix: str = "") -> list[StoredObject]:
+        """Objects under the prefix with their last-modified time (UTC)."""
+        raise NotImplementedError
+
     def delete_key(self, key: str) -> None:
         raise NotImplementedError
 
@@ -158,6 +169,19 @@ class LocalChunkStorage(ChunkStorage):
             return []
         root = self.root
         return [str(path.relative_to(root)).replace("\\", "/") for path in base.rglob("*") if path.is_file()]
+
+    def list_objects(self, prefix: str = "") -> list[StoredObject]:
+        base = self.root / prefix if prefix else self.root
+        if not base.exists():
+            return []
+        return [
+            StoredObject(
+                key=str(path.relative_to(self.root)).replace("\\", "/"),
+                last_modified=datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc),
+            )
+            for path in base.rglob("*")
+            if path.is_file()
+        ]
 
     def delete_key(self, key: str) -> None:
         target = self.root / key
@@ -316,6 +340,12 @@ class S3ChunkStorage(ChunkStorage):
                 break
             continuation_token = response.get("NextContinuationToken")
         return keys
+
+    def list_objects(self, prefix: str = "") -> list[StoredObject]:
+        objects: list[StoredObject] = []
+        for page in self.client.get_paginator("list_objects_v2").paginate(Bucket=self.bucket, Prefix=prefix):
+            objects.extend(StoredObject(item["Key"], item["LastModified"]) for item in page.get("Contents", []))
+        return objects
 
     def delete_key(self, key: str) -> None:
         self.client.delete_object(Bucket=self.bucket, Key=key)

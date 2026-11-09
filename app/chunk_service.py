@@ -196,6 +196,7 @@ def record_chunk(plan: ChunkPlan, result: StorageWriteResult, retries: int, idem
         )
         if upload.status == UploadStatus.initiated.value:
             upload.status = UploadStatus.in_progress.value
+        upload.last_activity_at = utc_now()
         if idempotency_key:
             _record_idempotency_key(db, plan, idempotency_key)
         db.commit()

@@ -128,3 +128,21 @@ def test_every_migration_downgrades_to_base_and_back(migration_db_url) -> None:
     _alembic(migration_db_url, "downgrade", "base")
     _alembic(migration_db_url, "upgrade", "head")
     assert set(_integer_types(migration_db_url).values()) == {"bigint"}
+
+
+def test_last_activity_backfilled_from_updated_at(migration_db_url) -> None:
+    _alembic(migration_db_url, "upgrade", "20261109_000006")
+    _execute(
+        migration_db_url,
+        "INSERT INTO uploads (id, owner_id, file_name, file_size, chunk_size, total_chunks, status, created_at, updated_at)"
+        " VALUES ('old', 'u', 'f.bin', 10, 5, 2, 'IN_PROGRESS', now(), TIMESTAMPTZ '2026-01-01 00:00:00+00')",
+    )
+    _alembic(migration_db_url, "upgrade", "head")
+    assert _execute(migration_db_url, "SELECT last_activity_at = updated_at FROM uploads WHERE id = 'old'") is True
+    assert (
+        _execute(
+            migration_db_url,
+            "SELECT is_nullable FROM information_schema.columns WHERE table_name = 'uploads' AND column_name = 'last_activity_at'",
+        )
+        == "NO"
+    )

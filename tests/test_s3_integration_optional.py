@@ -10,6 +10,7 @@ SSE is not covered here (Versity does not implement it); the fake-client unit te
 import hashlib
 import os
 import sys
+import time
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -19,6 +20,8 @@ from sqlalchemy import update
 import app.main  # noqa: F401  (imports every module that uses storage)
 from app.config import settings
 from app.db import SessionLocal
+from app.finalizer import process
+from app.jobs import FinalizeJob
 from app.models import Upload
 from app.storage import S3ChunkStorage
 from app.storage import storage as default_storage
@@ -98,7 +101,9 @@ def test_s3compat_multipart_round_trip(client, auth_headers, s3_backend) -> None
     upload_id = _upload(client, auth_headers, data, 5 * MIB)
     try:
         complete = client.post(f"/v1/uploads/{upload_id}/complete", headers=auth_headers)
-        assert complete.status_code == 200, complete.text
+        assert complete.status_code == 202, complete.text  # a declared checksum is verified asynchronously
+        process(FinalizeJob(upload_id))  # the verification worker, reading the real assembled object
+        assert client.get(f"/v1/uploads/{upload_id}", headers=auth_headers).json()["status"] == "COMPLETED"
 
         download = client.get(f"/v1/uploads/{upload_id}/download", headers=auth_headers)
         assert download.status_code == 200
@@ -166,3 +171,42 @@ def test_s3compat_completion_retry_after_assembly_succeeds(client, auth_headers,
         assert retry.json()["status"] == "COMPLETED"
     finally:
         _cleanup(s3_backend, upload_id)
+
+
+def test_s3compat_cleanup_aborts_an_abandoned_multipart_upload(client, auth_headers, s3_backend) -> None:
+    from app.maintenance import cleanup_once
+
+    data = os.urandom(2 * 5 * MIB)
+    init = client.post(
+        "/v1/uploads/init", json={"file_name": "gone.bin", "file_size": len(data), "chunk_size": 5 * MIB}, headers=auth_headers
+    )
+    upload_id = init.json()["upload_id"]
+    assert client.put(f"/v1/uploads/{upload_id}/chunks/0", content=data[: 5 * MIB], headers=auth_headers).status_code == 202
+    assert len(_pending_multipart(s3_backend, upload_id)) == 1
+    with SessionLocal() as db:  # the client went away two days ago
+        db.execute(
+            update(Upload)
+            .where(Upload.id == upload_id)
+            .values(last_activity_at=datetime.now(timezone.utc) - timedelta(days=2))
+        )
+        db.commit()
+
+    stats = cleanup_once()
+
+    assert stats["multipart_uploads_aborted"] == 1
+    assert _pending_multipart(s3_backend, upload_id) == []
+    with SessionLocal() as db:
+        assert db.get(Upload, upload_id) is None
+
+
+def test_s3compat_orphan_sweep_uses_real_last_modified(s3_backend, monkeypatch) -> None:
+    from app.maintenance import cleanup_once
+
+    key = f"uploads/orphan-{os.urandom(4).hex()}/chunk_0"
+    s3_backend.client.put_object(Bucket=BUCKET, Key=key, Body=b"x")
+    cleanup_once()
+    assert s3_backend.object_exists(key)  # just written: inside the grace period
+    monkeypatch.setattr(settings, "orphan_grace_seconds", 0)
+    time.sleep(1.1)  # LastModified has one-second resolution
+    cleanup_once()
+    assert not s3_backend.object_exists(key)

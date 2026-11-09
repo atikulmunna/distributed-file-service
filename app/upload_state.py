@@ -24,7 +24,7 @@ def transition(
     statement = (
         update(Upload)
         .where(Upload.id == upload_id, Upload.status.in_([status.value for status in allowed_from]))
-        .values(status=to.value, updated_at=utc_now(), failure_reason=failure_reason)
+        .values(status=to.value, updated_at=utc_now(), last_activity_at=utc_now(), failure_reason=failure_reason)
         # Callers never rely on ORM objects after a transition, so skip in-Python re-evaluation of
         # the WHERE clause (it would compare SQLite's naive timestamps with an aware cutoff).
         .execution_options(synchronize_session=False)

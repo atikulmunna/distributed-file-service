@@ -8,7 +8,6 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from app.config import settings
-from app.db import SessionLocal
 from app.finalizer import start_workers
 from app.jobs import job_queue
 from app.logging_utils import current_trace_id, log_event, request_id_of
@@ -30,8 +29,7 @@ async def lifespan(_: FastAPI):
     async def _periodic_cleanup_loop() -> None:
         while not stop_event.is_set():
             try:
-                with SessionLocal() as db:
-                    cleanup_once(db)
+                await asyncio.to_thread(cleanup_once)  # DB and storage calls block; keep them off the loop
             except Exception as exc:
                 log_event({"event": "cleanup_error", "detail": str(exc), "error_class": "maintenance_error"})
             try:

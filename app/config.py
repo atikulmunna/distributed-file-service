@@ -89,6 +89,9 @@ class Settings(BaseSettings):
     cleanup_interval_seconds: int = 900
     stale_upload_ttl_seconds: int = 86400
     idempotency_ttl_seconds: int = 86400
+    # An unreferenced stored object is deleted only once it is older than this: a chunk written to
+    # storage but whose DB row is not committed yet must survive the orphan sweep.
+    orphan_grace_seconds: int = 3600
 
 
 # DFS_ENV_FILE overrides which dotenv file is read; set it to an empty string to read none

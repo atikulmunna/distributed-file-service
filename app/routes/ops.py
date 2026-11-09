@@ -1,11 +1,9 @@
 """Operational endpoints: health, version, metrics, admin maintenance."""
 
 from fastapi import APIRouter, Depends, Response
-from sqlalchemy.orm import Session
 
 from app.auth import AuthUser, require_admin_user
 from app.config import settings
-from app.db import get_db
 from app.maintenance import cleanup_once
 from app.metrics import metrics_response
 from app.routes import COMMON_ERROR_RESPONSES
@@ -39,7 +37,6 @@ def metrics() -> Response:
 )
 def run_cleanup(
     user: AuthUser = Depends(require_admin_user),
-    db: Session = Depends(get_db),
 ) -> dict:
-    stats = cleanup_once(db)
+    stats = cleanup_once()
     return {"status": "ok", "requested_by": user.user_id, **stats}
