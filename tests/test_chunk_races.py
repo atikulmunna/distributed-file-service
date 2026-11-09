@@ -2,12 +2,12 @@
 
 import hashlib
 import threading
-from datetime import datetime, timezone
 
+from db_hooks import before_statement, db_now, raw_insert
 from fastapi.testclient import TestClient
-from sqlalchemy import event, select, update
+from sqlalchemy import select, update
 
-from app.db import SessionLocal, engine
+from app.db import SessionLocal
 from app.main import app, upload_limiter
 from app.models import Chunk, ChunkRequestIdempotency, Upload
 from app.storage import storage
@@ -26,47 +26,14 @@ def _chunk_rows(upload_id: str, index: int = 0) -> list[Chunk]:
         return list(db.scalars(select(Chunk).where(Chunk.upload_id == upload_id, Chunk.chunk_index == index)))
 
 
-class _InjectBefore:
-    """Run `action(cursor)` once, inside the server's transaction, right before a matching statement."""
-
-    def __init__(self, statement_prefix: str, action) -> None:
-        self.prefix = statement_prefix.upper()
-        self.action = action
-        self.fired = False
-
-    def __call__(self, conn, cursor, statement, parameters, context, executemany) -> None:
-        if not self.fired and statement.lstrip().upper().startswith(self.prefix):
-            self.fired = True
-            self.action(conn, cursor)
-
-    def __enter__(self):
-        event.listen(engine, "before_cursor_execute", self)
-        return self
-
-    def __exit__(self, *exc) -> None:
-        event.remove(engine, "before_cursor_execute", self)
-
-
-def _raw_insert(conn, cursor, table: str, columns: list[str], values: tuple) -> None:
-    mark = "?" if conn.dialect.name == "sqlite" else "%s"
-    raw = cursor.connection.cursor()
-    raw.execute(f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({', '.join([mark] * len(columns))})", values)
-    raw.close()
-
-
-def _now(conn):
-    now = datetime.now(timezone.utc)
-    return now.strftime("%Y-%m-%d %H:%M:%S.%f") if conn.dialect.name == "sqlite" else now
-
-
 def test_concurrent_same_chunk_puts_succeed(client, auth_headers) -> None:
     """Another request commits the same chunk between our existence check and our insert."""
     upload_id = _new_upload(client, auth_headers, 10, 5)
     body = b"abcde"
 
-    def racing_chunk_row(conn, cursor) -> None:
-        stamp = _now(conn)
-        _raw_insert(
+    def racing_chunk_row(conn, cursor, parameters) -> None:
+        stamp = db_now(conn)
+        raw_insert(
             conn,
             cursor,
             "chunks",
@@ -74,7 +41,7 @@ def test_concurrent_same_chunk_puts_succeed(client, auth_headers) -> None:
             (upload_id, 0, 5, f"uploads/{upload_id}/chunk_0", "UPLOADED", 0, stamp, stamp),
         )
 
-    with _InjectBefore("INSERT INTO chunks ", racing_chunk_row) as injection:
+    with before_statement("INSERT INTO chunks ", racing_chunk_row) as injection:
         response = client.put(f"/v1/uploads/{upload_id}/chunks/0", content=body, headers=auth_headers)
 
     assert injection.fired, "the racing insert never ran"
@@ -127,10 +94,10 @@ def test_commit_failure_after_write_leaves_chunk_missing(client, auth_headers) -
     """The process dies (here: the DB write fails) after the storage write but before the commit."""
     upload_id = _new_upload(client, auth_headers, 10, 5)
 
-    def fail(conn, cursor) -> None:
+    def fail(conn, cursor, parameters) -> None:
         raise RuntimeError("simulated crash between storage write and DB commit")
 
-    with _InjectBefore("INSERT INTO chunks ", fail) as injection:
+    with before_statement("INSERT INTO chunks ", fail) as injection:
         with TestClient(app, raise_server_exceptions=False) as tolerant:
             first = tolerant.put(f"/v1/uploads/{upload_id}/chunks/0", content=b"aaaaa", headers=auth_headers)
     assert injection.fired
@@ -145,13 +112,13 @@ def test_commit_failure_after_write_leaves_chunk_missing(client, auth_headers) -
 
 
 def _racing_idempotency_row(upload_id: str, key: str, fingerprint: str):
-    def insert(conn, cursor) -> None:
-        _raw_insert(
+    def insert(conn, cursor, parameters) -> None:
+        raw_insert(
             conn,
             cursor,
             "chunk_request_idempotency",
             ["upload_id", "chunk_index", "idempotency_key", "request_fingerprint", "created_at"],
-            (upload_id, 0, key, fingerprint, _now(conn)),
+            (upload_id, 0, key, fingerprint, db_now(conn)),
         )
 
     return insert
@@ -163,7 +130,7 @@ def test_racing_same_idempotency_key_same_payload_succeeds(client, auth_headers)
     headers = {**auth_headers, "Idempotency-Key": "k1"}
     racing = _racing_idempotency_row(upload_id, "k1", hashlib.sha256(body).hexdigest())
 
-    with _InjectBefore("INSERT INTO chunk_request_idempotency ", racing) as injection:
+    with before_statement("INSERT INTO chunk_request_idempotency ", racing) as injection:
         response = client.put(f"/v1/uploads/{upload_id}/chunks/0", content=body, headers=headers)
 
     assert injection.fired
@@ -178,7 +145,7 @@ def test_racing_idempotency_key_with_different_payload_conflicts(client, auth_he
     headers = {**auth_headers, "Idempotency-Key": "k1"}
     racing = _racing_idempotency_row(upload_id, "k1", hashlib.sha256(b"other").hexdigest())
 
-    with _InjectBefore("INSERT INTO chunk_request_idempotency ", racing) as injection:
+    with before_statement("INSERT INTO chunk_request_idempotency ", racing) as injection:
         response = client.put(f"/v1/uploads/{upload_id}/chunks/0", content=b"abcde", headers=headers)
 
     assert injection.fired

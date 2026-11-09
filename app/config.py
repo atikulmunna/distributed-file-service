@@ -40,6 +40,8 @@ class Settings(BaseSettings):
     max_chunk_size_bytes: int = 64 * 1024**2
     max_total_chunks: int = 10_000
     chunk_body_timeout_seconds: int = 60
+    # A COMPLETING upload whose claim is older than this may be taken over by another complete request.
+    completion_lease_seconds: int = 60
     max_retries: int = 3
     max_inflight_chunks_per_upload: int = 8
     max_fair_inflight_chunks_per_upload: int = 0

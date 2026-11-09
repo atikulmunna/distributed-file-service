@@ -9,7 +9,9 @@ suite against Postgres; the database is created if it does not exist.
 
 import os
 import shutil
+import socket
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -43,12 +45,14 @@ if _TEST_DATABASE_URL.startswith("postgresql"):
 
     ensure_postgres_database(_TEST_DATABASE_URL)
 
+import uvicorn  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
-from sqlalchemy import text  # noqa: E402
+from sqlalchemy import create_engine, text  # noqa: E402
 
 from app import models  # noqa: E402,F401  (registers tables on Base.metadata)
 from app.auth import api_key_rate_limiter  # noqa: E402
-from app.db import Base, engine  # noqa: E402
+from app.config import settings  # noqa: E402
+from app.db import Base, SessionLocal, engine  # noqa: E402
 from app.main import app  # noqa: E402
 from app.storage import storage  # noqa: E402
 
@@ -105,6 +109,38 @@ def slow_storage(monkeypatch):
         monkeypatch.setattr(storage, "write_chunk", slow_write)
 
     return _apply
+
+
+@pytest.fixture
+def small_pool():
+    """Bind sessions to a 2-connection pool with a 3 s checkout timeout for one test."""
+    small = create_engine(settings.database_url, pool_size=2, max_overflow=0, pool_timeout=3)
+    SessionLocal.configure(bind=small)
+    try:
+        yield small
+    finally:
+        SessionLocal.configure(bind=engine)
+        small.dispose()
+
+
+@pytest.fixture
+def live_server():
+    """Run the app on a real uvicorn server (TestClient hands bodies over without yielding)."""
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
+    thread = threading.Thread(target=server.run, daemon=True)
+    thread.start()
+    deadline = time.monotonic() + 10
+    while not server.started:
+        assert time.monotonic() < deadline, "uvicorn did not start"
+        time.sleep(0.05)
+    try:
+        yield f"http://127.0.0.1:{port}"
+    finally:
+        server.should_exit = True
+        thread.join(timeout=10)
 
 
 def pytest_sessionfinish(session, exitstatus):

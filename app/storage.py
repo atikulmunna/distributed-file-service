@@ -11,6 +11,10 @@ class StorageWriteResult:
 
 
 class ChunkStorage:
+    def assembled_key(self, upload_id: str) -> str:
+        """Key of the whole file once a multipart upload is completed."""
+        return f"uploads/{upload_id}/assembled"
+
     def initialize_upload(self, upload_id: str) -> str | None:
         return None
 
@@ -24,6 +28,13 @@ class ChunkStorage:
 
     def complete_upload(self, upload_id: str, multipart_upload_id: str | None, parts: list[dict]) -> None:
         return None
+
+    def abort_upload(self, upload_id: str, multipart_upload_id: str | None) -> None:
+        """Discard an unfinished multipart upload. No-op when there is none."""
+        return None
+
+    def object_exists(self, key: str) -> bool:
+        raise NotImplementedError
 
     def read_chunk(self, s3_key: str) -> bytes:
         raise NotImplementedError
@@ -54,6 +65,9 @@ class LocalChunkStorage(ChunkStorage):
 
     def read_chunk(self, s3_key: str) -> bytes:
         return (self.root / s3_key).read_bytes()
+
+    def object_exists(self, key: str) -> bool:
+        return (self.root / key).is_file()
 
     def list_keys(self, prefix: str = "") -> list[str]:
         base = self.root / prefix if prefix else self.root
@@ -98,11 +112,8 @@ class S3ChunkStorage(ChunkStorage):
     def chunk_key(self, upload_id: str, chunk_index: int) -> str:
         return f"uploads/{upload_id}/chunk_{chunk_index}"
 
-    def _assembled_key(self, upload_id: str) -> str:
-        return f"uploads/{upload_id}/assembled"
-
     def initialize_upload(self, upload_id: str) -> str | None:
-        key = self._assembled_key(upload_id)
+        key = self.assembled_key(upload_id)
         result = self.client.create_multipart_upload(Bucket=self.bucket, Key=key)
         return result["UploadId"]
 
@@ -114,7 +125,7 @@ class S3ChunkStorage(ChunkStorage):
             put_result = self.client.put_object(Bucket=self.bucket, Key=key, Body=data)
             return StorageWriteResult(key=key, etag=put_result.get("ETag"))
 
-        assembled_key = self._assembled_key(upload_id)
+        assembled_key = self.assembled_key(upload_id)
         result = self.client.upload_part(
             Bucket=self.bucket,
             Key=assembled_key,
@@ -128,13 +139,37 @@ class S3ChunkStorage(ChunkStorage):
     def complete_upload(self, upload_id: str, multipart_upload_id: str | None, parts: list[dict]) -> None:
         if not multipart_upload_id:
             raise ValueError("multipart_upload_id is required for s3 backend")
-        key = self._assembled_key(upload_id)
+        key = self.assembled_key(upload_id)
         self.client.complete_multipart_upload(
             Bucket=self.bucket,
             Key=key,
             UploadId=multipart_upload_id,
             MultipartUpload={"Parts": parts},
         )
+
+    def abort_upload(self, upload_id: str, multipart_upload_id: str | None) -> None:
+        if not multipart_upload_id:
+            return
+        from botocore.exceptions import ClientError
+
+        try:
+            self.client.abort_multipart_upload(
+                Bucket=self.bucket, Key=self.assembled_key(upload_id), UploadId=multipart_upload_id
+            )
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") not in ("NoSuchUpload", "404"):
+                raise
+
+    def object_exists(self, key: str) -> bool:
+        from botocore.exceptions import ClientError
+
+        try:
+            self.client.head_object(Bucket=self.bucket, Key=key)
+            return True
+        except ClientError as exc:
+            if exc.response.get("Error", {}).get("Code") in ("404", "NoSuchKey", "NotFound"):
+                return False
+            raise
 
     def read_chunk(self, s3_key: str) -> bytes:
         obj = self.client.get_object(Bucket=self.bucket, Key=s3_key)

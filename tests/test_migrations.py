@@ -114,10 +114,17 @@ def test_migration_round_trip(migration_db_url) -> None:
         " VALUES ('small', 0, 5, 'k', 'UPLOADED', 0, now(), now())",
     )
 
-    _alembic(migration_db_url, "downgrade", "-1")
+    _alembic(migration_db_url, "downgrade", "20260220_000004")  # the revision before 64-bit sizes
     assert set(_integer_types(migration_db_url).values()) == {"integer"}
     assert _execute(migration_db_url, "SELECT count(*) FROM chunks WHERE upload_id = 'small'") == 1
 
     _alembic(migration_db_url, "upgrade", "head")
     assert set(_integer_types(migration_db_url).values()) == {"bigint"}
     assert _execute(migration_db_url, "SELECT file_size FROM uploads WHERE id = 'small'") == 10
+
+
+def test_every_migration_downgrades_to_base_and_back(migration_db_url) -> None:
+    _alembic(migration_db_url, "upgrade", "head")
+    _alembic(migration_db_url, "downgrade", "base")
+    _alembic(migration_db_url, "upgrade", "head")
+    assert set(_integer_types(migration_db_url).values()) == {"bigint"}

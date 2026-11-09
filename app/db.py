@@ -18,6 +18,20 @@ engine = create_engine(settings.database_url, **engine_kwargs)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, class_=Session)
 
 
+def dialect_insert(session: Session):
+    """The INSERT construct for the session's database; it supports ON CONFLICT clauses."""
+    dialect = session.get_bind().dialect.name
+    if dialect == "postgresql":
+        from sqlalchemy.dialects.postgresql import insert
+
+        return insert
+    if dialect == "sqlite":
+        from sqlalchemy.dialects.sqlite import insert
+
+        return insert
+    raise NotImplementedError(f"ON CONFLICT inserts are not implemented for {dialect}")
+
+
 def get_db() -> Generator[Session, None, None]:
     db = SessionLocal()
     try:

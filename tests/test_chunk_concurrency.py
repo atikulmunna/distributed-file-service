@@ -4,19 +4,14 @@ The chunk handler must never block the event loop and must never hold a DB conne
 while it waits on the network (request body) or on object storage.
 """
 
-import socket
 import threading
 import time
 
 import httpx
-import pytest
-import uvicorn
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
 
 from app.config import settings
 from app.db import SessionLocal, engine
-from app.main import app
 
 
 def _init(client, headers: dict, file_size: int, chunk_size: int) -> str:
@@ -44,38 +39,6 @@ def test_no_db_connection_held_during_storage_write(client, auth_headers, slow_s
     put.join()
     assert statuses == [202]
     assert held_during_write == 0
-
-
-@pytest.fixture
-def small_pool():
-    """Bind sessions to a 2-connection pool with a 3 s checkout timeout for one test."""
-    small = create_engine(settings.database_url, pool_size=2, max_overflow=0, pool_timeout=3)
-    SessionLocal.configure(bind=small)
-    try:
-        yield small
-    finally:
-        SessionLocal.configure(bind=engine)
-        small.dispose()
-
-
-@pytest.fixture
-def live_server():
-    """Run the app on a real uvicorn server (TestClient hands bodies over without yielding)."""
-    with socket.socket() as probe:
-        probe.bind(("127.0.0.1", 0))
-        port = probe.getsockname()[1]
-    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
-    thread = threading.Thread(target=server.run, daemon=True)
-    thread.start()
-    deadline = time.monotonic() + 10
-    while not server.started:
-        assert time.monotonic() < deadline, "uvicorn did not start"
-        time.sleep(0.05)
-    try:
-        yield f"http://127.0.0.1:{port}"
-    finally:
-        server.should_exit = True
-        thread.join(timeout=10)
 
 
 def test_concurrent_slow_uploads_exceeding_db_pool_do_not_deadlock(live_server, small_pool, auth_headers) -> None:

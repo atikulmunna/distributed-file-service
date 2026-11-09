@@ -8,7 +8,7 @@ from collections.abc import Iterator
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 from starlette.requests import ClientDisconnect
@@ -34,7 +34,6 @@ from app.metrics import (
 from app.models import (
     Chunk,
     ChunkStatus,
-    CompleteRequestIdempotency,
     InitRequestIdempotency,
     Upload,
     UploadStatus,
@@ -47,9 +46,19 @@ from app.schemas import (
     InitUploadResponse,
     MissingChunksResponse,
     UploadChunkResponse,
+    UploadStatusResponse,
 )
 from app.storage import storage
 from app.upload_access import get_owned_upload
+from app.upload_lifecycle import (
+    CompletionReplay,
+    begin_abort,
+    claim_completion,
+    discard_storage,
+    finish_completion,
+    release_claim,
+    run_storage_work,
+)
 from app.worker import executor
 
 router = APIRouter()
@@ -308,103 +317,73 @@ def complete_upload(
     upload_id: str,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     user: AuthUser = Depends(require_api_user),
-    db: Session = Depends(get_db),
 ) -> CompleteUploadResponse:
-    request_fingerprint = _fingerprint({"upload_id": upload_id})
-    upload = get_owned_upload(db, upload_id, user)
-
-    if idempotency_key:
-        existing_request = db.get(CompleteRequestIdempotency, idempotency_key)
-        if existing_request:
-            if existing_request.request_fingerprint != request_fingerprint:
-                raise HTTPException(status_code=409, detail="idempotency key reused with different complete payload")
-            if existing_request.upload_id == upload_id:
-                existing_upload = db.get(Upload, upload_id)
-                if existing_upload:
-                    if existing_upload.owner_id != user.user_id:
-                        raise HTTPException(status_code=403, detail="idempotency key belongs to a different owner")
-                    return CompleteUploadResponse(upload_id=existing_upload.id, status=existing_upload.status)
-
-    if upload.status == UploadStatus.initiated.value:
-        raise HTTPException(status_code=409, detail="cannot complete upload from INITIATED state")
-    if upload.status == UploadStatus.completed.value:
-        if idempotency_key:
-            existing_request = db.get(CompleteRequestIdempotency, idempotency_key)
-            if not existing_request:
-                db.add(
-                    CompleteRequestIdempotency(
-                        idempotency_key=idempotency_key,
-                        upload_id=upload_id,
-                        request_fingerprint=request_fingerprint,
-                    )
-                )
-                db.commit()
-        audit_event(
-            {
-                "event": "audit",
-                "action": "upload_complete",
-                "request_id": request_id_of(request),
-                "upload_id": upload.id,
-                "user_id": user.user_id,
-                "status": upload.status,
-                "idempotent_replay": True,
-            }
-        )
-        return CompleteUploadResponse(upload_id=upload.id, status=upload.status)
-    if upload.status != UploadStatus.in_progress.value:
-        raise HTTPException(status_code=409, detail="cannot complete upload from current state")
-
-    uploaded_count = db.scalar(
-        select(func.count(Chunk.id)).where(Chunk.upload_id == upload_id, Chunk.status == ChunkStatus.uploaded.value)
-    )
-    if uploaded_count != upload.total_chunks:
-        raise HTTPException(status_code=409, detail="cannot complete upload, missing chunks")
-
-    uploaded_chunks = list(db.scalars(select(Chunk).where(Chunk.upload_id == upload_id).order_by(Chunk.chunk_index)).all())
-    stored_bytes = sum(chunk.size_bytes for chunk in uploaded_chunks)
-    if stored_bytes != upload.file_size:
-        raise HTTPException(
-            status_code=409, detail=f"chunk sizes add up to {stored_bytes} bytes, expected {upload.file_size}"
-        )
-    if upload.file_checksum_sha256:
-        full_file_hash = hashlib.sha256()
-        for chunk in uploaded_chunks:
-            full_file_hash.update(storage.read_chunk(chunk.s3_key))
-        if full_file_hash.hexdigest() != upload.file_checksum_sha256:
-            raise HTTPException(status_code=409, detail="file checksum mismatch")
-    if settings.storage_backend.lower() in ("s3", "r2") and upload.multipart_upload_id:
-        parts: list[dict] = []
-        for chunk in uploaded_chunks:
-            if not chunk.s3_etag:
-                raise HTTPException(status_code=409, detail="cannot complete upload, missing S3 part etag")
-            parts.append({"PartNumber": chunk.chunk_index + 1, "ETag": chunk.s3_etag})
-        try:
-            storage.complete_upload(upload_id=upload_id, multipart_upload_id=upload.multipart_upload_id, parts=parts)
-        except Exception as exc:
-            raise HTTPException(status_code=500, detail=f"failed to complete multipart upload: {exc}") from exc
-
-    upload.status = UploadStatus.completed.value
-    if idempotency_key:
-        db.add(
-            CompleteRequestIdempotency(
-                idempotency_key=idempotency_key,
-                upload_id=upload_id,
-                request_fingerprint=request_fingerprint,
+    fingerprint = _fingerprint({"upload_id": upload_id})
+    claimed = claim_completion(upload_id, user, idempotency_key, fingerprint)
+    if isinstance(claimed, CompletionReplay):
+        if claimed.already_completed:
+            audit_event(
+                {
+                    "event": "audit",
+                    "action": "upload_complete",
+                    "request_id": request_id_of(request),
+                    "upload_id": upload_id,
+                    "user_id": user.user_id,
+                    "status": claimed.response.status,
+                    "idempotent_replay": True,
+                }
             )
-        )
-    db.commit()
+        return claimed.response
+
+    try:
+        run_storage_work(claimed)
+    except Exception:
+        release_claim(upload_id)  # storage did not finish: let the client fix the problem and retry
+        raise
+    status = finish_completion(upload_id, idempotency_key, fingerprint)
     audit_event(
         {
             "event": "audit",
             "action": "upload_complete",
             "request_id": request_id_of(request),
-            "upload_id": upload.id,
+            "upload_id": upload_id,
             "user_id": user.user_id,
-            "status": upload.status,
+            "status": status,
             "idempotent_replay": False,
         }
     )
-    return CompleteUploadResponse(upload_id=upload.id, status=upload.status)
+    return CompleteUploadResponse(upload_id=upload_id, status=status)
+
+
+@router.delete(
+    "/v1/uploads/{upload_id}",
+    response_model=UploadStatusResponse,
+    responses={
+        **COMMON_ERROR_RESPONSES,
+        404: {"model": ErrorResponse, "description": "Upload not found"},
+        409: {"model": ErrorResponse, "description": "Upload is completing or completed"},
+    },
+)
+def abort_upload_endpoint(
+    request: Request,
+    upload_id: str,
+    user: AuthUser = Depends(require_api_user),
+) -> UploadStatusResponse:
+    """Abort an unfinished upload: mark it ABORTED and discard its stored data. Repeating it is a no-op."""
+    work, failure_reason = begin_abort(upload_id, user)
+    if work is not None:
+        discard_storage(work)
+        audit_event(
+            {
+                "event": "audit",
+                "action": "upload_abort",
+                "request_id": request_id_of(request),
+                "upload_id": upload_id,
+                "user_id": user.user_id,
+                "status": UploadStatus.aborted.value,
+            }
+        )
+    return UploadStatusResponse(upload_id=upload_id, status=UploadStatus.aborted.value, failure_reason=failure_reason)
 
 
 @router.get(

@@ -6,18 +6,15 @@ into a suite failure, and the fixing task removes the marker and moves the test 
 feature it covers. This file should be empty (and deleted) after Task 13.
 """
 
-import threading
-import time
 from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select, update
 
-from app.config import settings
 from app.db import SessionLocal
 from app.maintenance import cleanup_once
-from app.models import Chunk, Upload
+from app.models import Upload
 from app.storage import storage
 
 
@@ -44,40 +41,6 @@ def _completed_upload(client: TestClient, headers: dict, body: bytes, file_name:
     assert _put(client, headers, upload_id, 0, body).status_code == 202
     assert client.post(f"/v1/uploads/{upload_id}/complete", headers=headers).status_code == 200
     return upload_id
-
-
-@known_bug(8)
-def test_concurrent_complete_calls_storage_once(client, auth_headers, monkeypatch) -> None:
-    upload_id = _init(client, auth_headers, 10, 5)
-    assert _put(client, auth_headers, upload_id, 0, b"aaaaa").status_code == 202
-    assert _put(client, auth_headers, upload_id, 1, b"bbbbb").status_code == 202
-    with SessionLocal() as db:
-        db.execute(update(Upload).where(Upload.id == upload_id).values(multipart_upload_id="mp-test"))
-        db.execute(update(Chunk).where(Chunk.upload_id == upload_id).values(s3_etag='"etag"'))
-        db.commit()
-
-    calls: list[dict] = []
-
-    def slow_complete(**kwargs) -> None:
-        calls.append(kwargs)
-        time.sleep(0.3)
-
-    monkeypatch.setattr(storage, "complete_upload", slow_complete)
-    monkeypatch.setattr(settings, "storage_backend", "s3")
-    statuses: list[int] = []
-
-    def complete() -> None:
-        statuses.append(client.post(f"/v1/uploads/{upload_id}/complete", headers=auth_headers).status_code)
-
-    threads = [threading.Thread(target=complete) for _ in range(2)]
-    for thread in threads:
-        thread.start()
-    for thread in threads:
-        thread.join()
-
-    assert len(calls) == 1, f"storage complete_upload called {len(calls)} times"
-    with SessionLocal() as db:
-        assert db.get(Upload, upload_id).status == "COMPLETED"
 
 
 @known_bug(11)

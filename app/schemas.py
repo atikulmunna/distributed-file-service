@@ -35,6 +35,12 @@ class CompleteUploadResponse(BaseModel):
     status: str
 
 
+class UploadStatusResponse(BaseModel):
+    upload_id: str
+    status: str
+    failure_reason: str | None = None
+
+
 class MissingChunksResponse(BaseModel):
     upload_id: str
     missing_chunk_indexes: list[int]

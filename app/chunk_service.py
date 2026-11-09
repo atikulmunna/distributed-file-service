@@ -13,12 +13,11 @@ from dataclasses import dataclass
 
 from fastapi import HTTPException
 from sqlalchemy import select
-from sqlalchemy.dialects import postgresql, sqlite
 from sqlalchemy.orm import Session
 
 from app.auth import AuthUser
 from app.config import settings
-from app.db import SessionLocal
+from app.db import SessionLocal, dialect_insert
 from app.durable_queue import ChunkResultStore, ChunkWriteTask, build_durable_queue
 from app.layout import ChunkLayout
 from app.metrics import (
@@ -151,21 +150,12 @@ def persist_chunk_via_queue(plan: ChunkPlan, body: bytes) -> StorageWriteResult:
     return StorageWriteResult(key=payload["key"], etag=payload["etag"])
 
 
-def _dialect_insert(db: Session):
-    dialect = db.get_bind().dialect.name
-    if dialect == "postgresql":
-        return postgresql.insert
-    if dialect == "sqlite":
-        return sqlite.insert
-    raise NotImplementedError(f"upserts are not implemented for {dialect}")
-
-
 CHUNK_UPSERT_COLUMNS = ("size_bytes", "chunk_checksum_sha256", "s3_key", "s3_etag", "status", "retry_count", "updated_at")
 
 
 def upsert_chunk(db: Session, values: dict) -> None:
     """Insert or update the chunk row in one statement, so racing writers of the same chunk cannot collide."""
-    statement = _dialect_insert(db)(Chunk).values(**values)
+    statement = dialect_insert(db)(Chunk).values(**values)
     statement = statement.on_conflict_do_update(
         index_elements=[Chunk.upload_id, Chunk.chunk_index],
         set_={column: statement.excluded[column] for column in CHUNK_UPSERT_COLUMNS},
@@ -175,7 +165,7 @@ def upsert_chunk(db: Session, values: dict) -> None:
 
 def _record_idempotency_key(db: Session, plan: ChunkPlan, idempotency_key: str) -> None:
     """Bind the key to this payload. If a racing request bound it to a different payload, reject (409)."""
-    statement = _dialect_insert(db)(ChunkRequestIdempotency).values(
+    statement = dialect_insert(db)(ChunkRequestIdempotency).values(
         upload_id=plan.upload_id,
         chunk_index=plan.chunk_index,
         idempotency_key=idempotency_key,

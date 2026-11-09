@@ -11,6 +11,8 @@ from app.db import Base
 class UploadStatus(str, enum.Enum):
     initiated = "INITIATED"
     in_progress = "IN_PROGRESS"
+    completing = "COMPLETING"  # claimed by one complete request; storage work in progress
+    verifying = "VERIFYING"  # whole-file checksum verification pending (Task 12)
     completed = "COMPLETED"
     failed = "FAILED"
     aborted = "ABORTED"
@@ -43,6 +45,7 @@ class Upload(Base):
     file_checksum_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default=UploadStatus.initiated.value)
     multipart_upload_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
 

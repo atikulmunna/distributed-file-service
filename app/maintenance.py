@@ -21,10 +21,6 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _assembled_key(upload_id: str) -> str:
-    return f"uploads/{upload_id}/assembled"
-
-
 def cleanup_once(db: Session) -> dict[str, int]:
     now = _utc_now()
     stale_before = now - timedelta(seconds=settings.stale_upload_ttl_seconds)
@@ -53,7 +49,7 @@ def cleanup_once(db: Session) -> dict[str, int]:
                 pass
         if settings.storage_backend.lower() in ("s3", "r2"):
             try:
-                storage.delete_key(_assembled_key(upload.id))
+                storage.delete_key(storage.assembled_key(upload.id))
                 deleted_storage_keys += 1
             except Exception:
                 pass
@@ -74,7 +70,7 @@ def cleanup_once(db: Session) -> dict[str, int]:
     referenced_keys = set(db.scalars(select(Chunk.s3_key)).all())
     if settings.storage_backend.lower() in ("s3", "r2"):
         for upload_id in db.scalars(select(Upload.id)).all():
-            referenced_keys.add(_assembled_key(upload_id))
+            referenced_keys.add(storage.assembled_key(upload_id))
 
     orphan_deleted = 0
     try:
