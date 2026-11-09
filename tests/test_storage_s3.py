@@ -155,3 +155,10 @@ def test_build_storage_s3_without_endpoint_uses_default_addressing(monkeypatch) 
 
     assert "endpoint_url" not in calls[0]
     assert calls[0]["config"].s3 is None  # default (virtual-hosted) addressing
+
+
+def test_iter_range_is_one_streaming_ranged_get(monkeypatch) -> None:
+    storage, fake_client = _fake_storage(monkeypatch)
+    blocks = list(storage.iter_range("uploads/u1/assembled", 1, 3, block_size=2))
+    assert fake_client.calls[-1] == ("get_object", {"Bucket": "bucket-1", "Key": "uploads/u1/assembled", "Range": "bytes=1-3"})
+    assert b"".join(blocks)  # streamed through iter_chunks

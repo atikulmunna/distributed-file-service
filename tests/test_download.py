@@ -98,9 +98,31 @@ def test_empty_file_download_has_zero_length(client, auth_headers) -> None:
 # ---------------------------------------------------------------- reading only what is needed
 
 
+def _spy_iter_range(monkeypatch) -> list[tuple[str, int, int]]:
+    reads: list[tuple[str, int, int]] = []
+    real = storage.iter_range
+
+    def spy(key: str, start: int, end: int, block_size: int = 8 * 1024 * 1024):
+        reads.append((key, start, end))
+        yield from real(key, start, end, block_size)
+
+    monkeypatch.setattr(storage, "iter_range", spy)
+    return reads
+
+
 def test_range_near_end_reads_only_needed_bytes(client, auth_headers, monkeypatch) -> None:
     data = bytes(range(20))
     upload_id = _completed(client, auth_headers, data, 5)  # chunks of 5: offsets 0, 5, 10, 15
+    reads = _spy_iter_range(monkeypatch)
+    response = _get(client, auth_headers, upload_id, "bytes=17-19")
+    assert response.status_code == 206 and response.content == data[17:20]
+    assert reads == [(f"uploads/{upload_id}/chunk_3", 2, 4)]  # one streaming ranged read per piece
+
+
+def test_parallel_mode_also_reads_only_needed_bytes(client, auth_headers, monkeypatch) -> None:
+    monkeypatch.setattr(settings, "download_prefetch", 4)
+    data = bytes(range(20))
+    upload_id = _completed(client, auth_headers, data, 5)
     reads: list[tuple[str, int, int]] = []
     real_read = storage.read_range
 
@@ -124,13 +146,13 @@ def test_range_across_chunk_boundaries(client, auth_headers) -> None:
 def test_no_db_connection_held_while_streaming(client, auth_headers, monkeypatch) -> None:
     upload_id = _completed(client, auth_headers, b"0123456789", 5)
     held: list[int] = []
-    real_read = storage.read_range
+    real = storage.iter_range
 
-    def observed(key: str, start: int, end: int) -> bytes:
+    def observed(key: str, start: int, end: int, block_size: int = 8 * 1024 * 1024):
         held.append(engine.pool.checkedout())
-        return real_read(key, start, end)
+        yield from real(key, start, end, block_size)
 
-    monkeypatch.setattr(storage, "read_range", observed)
+    monkeypatch.setattr(storage, "iter_range", observed)
     assert _get(client, auth_headers, upload_id).status_code == 200
     assert held and set(held) == {0}
 
@@ -188,3 +210,26 @@ def test_prefetch_stops_when_the_client_goes_away(monkeypatch) -> None:
     stream.close()  # the response is abandoned after the first segment
     time.sleep(0.1)
     assert fake.calls <= 4 + 1
+
+
+def test_sequential_mode_streams_each_piece_once(monkeypatch) -> None:
+    calls: list[tuple[str, int, int, int]] = []
+
+    def fake_iter_range(key: str, start: int, end: int, block_size: int = 8 * 1024 * 1024):
+        calls.append((key, start, end, block_size))
+        data = key.encode() * (end - start + 1)
+        for offset in range(0, len(data), block_size):
+            yield data[offset : offset + block_size]
+
+    monkeypatch.setattr(storage, "iter_range", fake_iter_range)
+    output = b"".join(iter_pieces([Piece("a", 0, 9), Piece("b", 2, 4)], segment_bytes=4, prefetch=1))
+    assert output == b"a" * 10 + b"b" * 3
+    assert calls == [("a", 0, 9, 4), ("b", 2, 4, 4)]
+
+
+def test_local_iter_range_streams_exact_bytes(tmp_path) -> None:
+    from app.storage import LocalChunkStorage
+
+    local = LocalChunkStorage(str(tmp_path))
+    key = local.write_chunk("u1", 0, bytes(range(10))).key
+    assert list(local.iter_range(key, 2, 8, block_size=3)) == [bytes([2, 3, 4]), bytes([5, 6, 7]), bytes([8])]

@@ -3,8 +3,8 @@
 prepare_download reads everything it needs in one short DB session (the session is closed before any
 byte is streamed). It maps the requested byte range to pieces of stored objects: the assembled object
 for an S3 multipart upload, or the chunk objects that cover the range otherwise. iter_pieces then
-reads those pieces as ranged reads of at most download_segment_bytes, keeping up to download_prefetch
-segments in flight on a dedicated thread pool and yielding them in order.
+streams those pieces: by default one streaming ranged read per piece; with download_prefetch above 1,
+as segment-sized ranged reads with that many in flight on a dedicated thread pool, yielded in order.
 """
 
 from __future__ import annotations
@@ -108,15 +108,35 @@ def _read_segment(key: str, start: int, end: int) -> bytes:
     return with_storage_retries(lambda: storage.read_range(key, start, end), "download")
 
 
+def _stream_piece(piece: Piece, block_size: int) -> Iterator[bytes]:
+    """One streaming ranged read. Opening it (up to the first block) follows the storage retry policy."""
+
+    def open_stream() -> tuple[bytes, Iterator[bytes]]:
+        blocks = storage.iter_range(piece.key, piece.start, piece.end, block_size)
+        return next(blocks, b""), blocks
+
+    first, rest = with_storage_retries(open_stream, "download")
+    if first:
+        yield first
+    yield from rest
+
+
 def iter_pieces(pieces: list[Piece], segment_bytes: int, prefetch: int) -> Iterator[bytes]:
-    """Yield the pieces' bytes in order, with up to `prefetch` segment reads in flight.
+    """Yield the pieces' bytes in order.
+
+    prefetch <= 1: one streaming ranged read per piece, in blocks of segment_bytes.
+    prefetch > 1: segment-sized ranged reads with up to `prefetch` in flight.
 
     Memory is bounded by about (prefetch + 1) segments. If the consumer stops early (client gone),
     reads that have not started are cancelled.
     """
+    if prefetch <= 1:
+        for piece in pieces:
+            yield from _stream_piece(piece, segment_bytes)
+        return
     segments = _segments(pieces, segment_bytes)
     pending: deque[Future] = deque(
-        _download_executor.submit(_read_segment, *segment) for segment in itertools.islice(segments, max(1, prefetch))
+        _download_executor.submit(_read_segment, *segment) for segment in itertools.islice(segments, prefetch)
     )
     try:
         while pending:

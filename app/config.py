@@ -47,10 +47,14 @@ class Settings(BaseSettings):
     chunk_body_timeout_seconds: int = 60
     # A COMPLETING upload whose claim is older than this may be taken over by another complete request.
     completion_lease_seconds: int = 60
-    # Downloads read stored objects in ranged segments of this size, with up to download_prefetch
-    # segments in flight per download (memory per download: about (prefetch + 1) segments).
+    # download_prefetch = 1: each stored piece is read with one streaming ranged GET, in blocks of
+    # download_segment_bytes. Above 1: pieces are split into ranged GETs of download_segment_bytes with
+    # that many in flight (memory about (prefetch + 1) segments). Measured on the local bench stack
+    # (near-zero storage latency): one streaming GET read 2233 MiB/s, 8 MiB ranged GETs 514 MiB/s at
+    # prefetch 1 and 435 MiB/s at prefetch 4, so the default streams. Parallel ranged reads pay off on
+    # high-latency storage; set the production value from a real-S3 measurement (Task 22).
     download_segment_bytes: int = 8 * 1024 * 1024
-    download_prefetch: int = 4
+    download_prefetch: int = 1
     max_retries: int = 3  # retries after the first attempt, for transient storage errors only
     retry_base_delay_ms: int = 100
     retry_max_delay_ms: int = 2000
