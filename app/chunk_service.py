@@ -13,6 +13,8 @@ from dataclasses import dataclass
 
 from fastapi import HTTPException
 from sqlalchemy import select
+from sqlalchemy.dialects import postgresql, sqlite
+from sqlalchemy.orm import Session
 
 from app.auth import AuthUser
 from app.config import settings
@@ -25,7 +27,14 @@ from app.metrics import (
     db_update_latency_seconds,
     s3_put_latency_seconds,
 )
-from app.models import Chunk, ChunkRequestIdempotency, ChunkStatus, Upload, UploadStatus
+from app.models import (
+    Chunk,
+    ChunkRequestIdempotency,
+    ChunkStatus,
+    Upload,
+    UploadStatus,
+    utc_now,
+)
 from app.schemas import UploadChunkResponse
 from app.storage import StorageWriteResult, storage
 from app.upload_access import get_owned_upload
@@ -142,47 +151,88 @@ def persist_chunk_via_queue(plan: ChunkPlan, body: bytes) -> StorageWriteResult:
     return StorageWriteResult(key=payload["key"], etag=payload["etag"])
 
 
+def _dialect_insert(db: Session):
+    dialect = db.get_bind().dialect.name
+    if dialect == "postgresql":
+        return postgresql.insert
+    if dialect == "sqlite":
+        return sqlite.insert
+    raise NotImplementedError(f"upserts are not implemented for {dialect}")
+
+
+CHUNK_UPSERT_COLUMNS = ("size_bytes", "chunk_checksum_sha256", "s3_key", "s3_etag", "status", "retry_count", "updated_at")
+
+
+def upsert_chunk(db: Session, values: dict) -> None:
+    """Insert or update the chunk row in one statement, so racing writers of the same chunk cannot collide."""
+    statement = _dialect_insert(db)(Chunk).values(**values)
+    statement = statement.on_conflict_do_update(
+        index_elements=[Chunk.upload_id, Chunk.chunk_index],
+        set_={column: statement.excluded[column] for column in CHUNK_UPSERT_COLUMNS},
+    )
+    db.execute(statement)
+
+
+def _record_idempotency_key(db: Session, plan: ChunkPlan, idempotency_key: str) -> None:
+    """Bind the key to this payload. If a racing request bound it to a different payload, reject (409)."""
+    statement = _dialect_insert(db)(ChunkRequestIdempotency).values(
+        upload_id=plan.upload_id,
+        chunk_index=plan.chunk_index,
+        idempotency_key=idempotency_key,
+        request_fingerprint=plan.sha256,
+    )
+    db.execute(
+        statement.on_conflict_do_nothing(
+            index_elements=[
+                ChunkRequestIdempotency.upload_id,
+                ChunkRequestIdempotency.chunk_index,
+                ChunkRequestIdempotency.idempotency_key,
+            ]
+        )
+    )
+    stored = db.scalar(
+        select(ChunkRequestIdempotency.request_fingerprint).where(
+            ChunkRequestIdempotency.upload_id == plan.upload_id,
+            ChunkRequestIdempotency.chunk_index == plan.chunk_index,
+            ChunkRequestIdempotency.idempotency_key == idempotency_key,
+        )
+    )
+    if stored != plan.sha256:
+        raise HTTPException(status_code=409, detail="idempotency key reused with different chunk payload")
+
+
 def record_chunk(plan: ChunkPlan, result: StorageWriteResult, retries: int, idempotency_key: str | None) -> None:
-    """Write the chunk row (and idempotency row) in one short transaction."""
+    """Record the stored chunk in one short transaction.
+
+    The upload row is locked (SELECT ... FOR UPDATE on Postgres) and its status rechecked, so a
+    chunk cannot be recorded after the upload completed while this request was writing to storage.
+    Any error rolls back the whole transaction, including the chunk row.
+    """
     db_t0 = time.perf_counter()
     with SessionLocal() as db:
-        upload = db.get(Upload, plan.upload_id)
+        upload = db.scalar(select(Upload).where(Upload.id == plan.upload_id).with_for_update())
         if upload is None:
             raise HTTPException(status_code=404, detail="upload not found")
-        existing = db.scalar(
-            select(Chunk).where(Chunk.upload_id == plan.upload_id, Chunk.chunk_index == plan.chunk_index)
+        if upload.status not in (UploadStatus.in_progress.value, UploadStatus.initiated.value):
+            raise HTTPException(status_code=409, detail="upload is not accepting chunks")
+        upsert_chunk(
+            db,
+            {
+                "upload_id": plan.upload_id,
+                "chunk_index": plan.chunk_index,
+                "size_bytes": plan.size,
+                "chunk_checksum_sha256": plan.sha256,
+                "s3_key": result.key,
+                "s3_etag": result.etag,
+                "status": ChunkStatus.uploaded.value,
+                "retry_count": retries,
+                "updated_at": utc_now(),
+            },
         )
-        if existing:
-            existing.size_bytes = plan.size
-            existing.chunk_checksum_sha256 = plan.sha256
-            existing.s3_key = result.key
-            existing.s3_etag = result.etag
-            existing.status = ChunkStatus.uploaded.value
-            existing.retry_count = retries
-        else:
-            db.add(
-                Chunk(
-                    upload_id=plan.upload_id,
-                    chunk_index=plan.chunk_index,
-                    size_bytes=plan.size,
-                    chunk_checksum_sha256=plan.sha256,
-                    s3_key=result.key,
-                    s3_etag=result.etag,
-                    status=ChunkStatus.uploaded.value,
-                    retry_count=retries,
-                )
-            )
         if upload.status == UploadStatus.initiated.value:
             upload.status = UploadStatus.in_progress.value
         if idempotency_key:
-            db.add(
-                ChunkRequestIdempotency(
-                    upload_id=plan.upload_id,
-                    chunk_index=plan.chunk_index,
-                    idempotency_key=idempotency_key,
-                    request_fingerprint=plan.sha256,
-                )
-            )
+            _record_idempotency_key(db, plan, idempotency_key)
         db.commit()
     db_update_latency_seconds.observe(time.perf_counter() - db_t0)
     chunks_uploaded_total.inc()

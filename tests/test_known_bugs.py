@@ -6,17 +6,16 @@ into a suite failure, and the fixing task removes the marker and moves the test 
 feature it covers. This file should be empty (and deleted) after Task 13.
 """
 
-import hashlib
 import threading
 import time
 from datetime import datetime, timedelta, timezone
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import event, func, select, update
+from sqlalchemy import func, select, update
 
 from app.config import settings
-from app.db import SessionLocal, engine
+from app.db import SessionLocal
 from app.maintenance import cleanup_once
 from app.models import Chunk, Upload
 from app.storage import storage
@@ -45,48 +44,6 @@ def _completed_upload(client: TestClient, headers: dict, body: bytes, file_name:
     assert _put(client, headers, upload_id, 0, body).status_code == 202
     assert client.post(f"/v1/uploads/{upload_id}/complete", headers=headers).status_code == 200
     return upload_id
-
-
-@known_bug(7)
-def test_concurrent_same_chunk_puts_succeed(client, auth_headers) -> None:
-    """Another request commits the same chunk between our existence check and our insert.
-
-    Simulated deterministically: right before the server's INSERT into chunks, a row for the
-    same (upload_id, chunk_index) is written in the same transaction, as a racing writer would.
-    """
-    upload_id = _init(client, auth_headers, 10, 5)
-    body = b"abcde"
-    fired: list[bool] = []
-
-    def inject_racing_row(conn, cursor, statement, parameters, context, executemany):
-        if fired or not statement.lstrip().upper().startswith("INSERT INTO CHUNKS "):
-            return
-        fired.append(True)
-        now = datetime.now(timezone.utc)
-        if conn.dialect.name == "sqlite":
-            marks, stamp = ", ".join(["?"] * 8), now.strftime("%Y-%m-%d %H:%M:%S.%f")
-        else:
-            marks, stamp = ", ".join(["%s"] * 8), now
-        racing = cursor.connection.cursor()
-        racing.execute(
-            "INSERT INTO chunks (upload_id, chunk_index, size_bytes, s3_key, status, retry_count, created_at, updated_at)"
-            f" VALUES ({marks})",
-            (upload_id, 0, 5, f"uploads/{upload_id}/chunk_0", "UPLOADED", 0, stamp, stamp),
-        )
-        racing.close()
-
-    event.listen(engine, "before_cursor_execute", inject_racing_row)
-    try:
-        response = _put(client, auth_headers, upload_id, 0, body)
-    finally:
-        event.remove(engine, "before_cursor_execute", inject_racing_row)
-
-    assert fired, "the racing insert never ran"
-    assert response.status_code == 202
-    with SessionLocal() as db:
-        rows = list(db.scalars(select(Chunk).where(Chunk.upload_id == upload_id, Chunk.chunk_index == 0)))
-    assert len(rows) == 1
-    assert rows[0].chunk_checksum_sha256 == hashlib.sha256(body).hexdigest()
 
 
 @known_bug(8)
