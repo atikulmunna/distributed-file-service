@@ -204,12 +204,15 @@ def init_upload(
 
 async def _read_chunk_body(request: Request, size: int, timeout_s: float) -> bytes:
     """Read exactly `size` bytes within `timeout_s`. Nothing is stored and no slot is held while reading."""
-    buffer = bytearray()
+    pieces: list[bytes] = []
+    received = 0
 
     async def read_all() -> None:
+        nonlocal received
         async for piece in request.stream():
-            buffer.extend(piece)
-            if len(buffer) > size:
+            pieces.append(piece)
+            received += len(piece)
+            if received > size:
                 raise HTTPException(status_code=400, detail=f"chunk body is longer than its Content-Length of {size} bytes")
 
     try:
@@ -218,11 +221,11 @@ async def _read_chunk_body(request: Request, size: int, timeout_s: float) -> byt
         raise HTTPException(status_code=408, detail=f"chunk body not received within {timeout_s} s") from exc
     except ClientDisconnect as exc:
         raise HTTPException(status_code=499, detail="client disconnected before sending the whole chunk") from exc
-    if len(buffer) != size:
+    if received != size:
         raise HTTPException(
-            status_code=400, detail=f"chunk body is {len(buffer)} bytes, shorter than its Content-Length of {size}"
+            status_code=400, detail=f"chunk body is {received} bytes, shorter than its Content-Length of {size}"
         )
-    return bytes(buffer)
+    return b"".join(pieces)  # one copy; cheaper on the event loop than growing a bytearray
 
 
 @router.put(
