@@ -54,3 +54,37 @@ def test_s3_storage_multipart_flow(monkeypatch) -> None:
     assert fake_client.calls[0][1]["Key"] == "uploads/u1/assembled"
     assert fake_client.calls[1][1]["Key"] == "uploads/u1/assembled"
     assert fake_client.calls[2][1]["Key"] == "uploads/u1/chunk_0"
+
+
+def test_build_storage_s3_uses_endpoint_url_with_path_style(monkeypatch) -> None:
+    from app.storage import build_storage, settings
+
+    calls: list[dict] = []
+    fake_boto3 = types.SimpleNamespace(client=lambda service_name, **kwargs: calls.append(kwargs) or object())
+    monkeypatch.setitem(sys.modules, "boto3", fake_boto3)
+    monkeypatch.setattr(settings, "storage_backend", "s3")
+    monkeypatch.setattr(settings, "s3_bucket", "dfs", raising=False)
+    monkeypatch.setattr(settings, "s3_endpoint_url", "http://s3.local:7070", raising=False)
+
+    storage = build_storage()
+
+    assert isinstance(storage, S3ChunkStorage)
+    assert storage.bucket == "dfs"
+    assert calls[0]["endpoint_url"] == "http://s3.local:7070"
+    assert calls[0]["config"].s3 == {"addressing_style": "path"}
+
+
+def test_build_storage_s3_without_endpoint_uses_default_addressing(monkeypatch) -> None:
+    from app.storage import build_storage, settings
+
+    calls: list[dict] = []
+    fake_boto3 = types.SimpleNamespace(client=lambda service_name, **kwargs: calls.append(kwargs) or object())
+    monkeypatch.setitem(sys.modules, "boto3", fake_boto3)
+    monkeypatch.setattr(settings, "storage_backend", "s3")
+    monkeypatch.setattr(settings, "s3_bucket", "dfs", raising=False)
+    monkeypatch.setattr(settings, "s3_endpoint_url", "", raising=False)
+
+    build_storage()
+
+    assert "endpoint_url" not in calls[0]
+    assert "config" not in calls[0]

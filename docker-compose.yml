@@ -50,6 +50,58 @@ services:
     volumes:
       - app_data:/app/data
 
+  # Benchmark stack: `docker compose --profile bench up -d --build app-bench`.
+  # S3-compatible storage is Versity Gateway (MinIO images are no longer publicly pullable).
+  # app-bench reads no .env file, so benchmark config is exactly what is written here.
+  s3:
+    image: versity/versitygw:v1.10.0
+    container_name: dfs-s3
+    profiles: ["bench"]
+    environment:
+      ROOT_ACCESS_KEY: dfs-local-access
+      ROOT_SECRET_KEY: dfs-local-secret-key
+      VGW_BACKEND: posix
+      VGW_BACKEND_ARG: /data
+    ports:
+      - "7070:7070"
+    volumes:
+      - s3_data:/data
+
+  bench-init:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    profiles: ["bench"]
+    command: ["python", "scripts/bench_init.py"]
+    environment: &bench_env
+      DATABASE_URL: postgresql+psycopg://dfs:dfs@db:5432/dfs_bench
+      STORAGE_BACKEND: s3
+      S3_BUCKET: dfs
+      S3_ENDPOINT_URL: http://s3:7070
+      AWS_ACCESS_KEY_ID: dfs-local-access
+      AWS_SECRET_ACCESS_KEY: dfs-local-secret-key
+      AWS_REGION: us-east-1
+      QUEUE_BACKEND: memory
+    depends_on:
+      db:
+        condition: service_healthy
+      s3:
+        condition: service_started
+
+  app-bench:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: dfs-app-bench
+    profiles: ["bench"]
+    environment: *bench_env
+    ports:
+      - "8001:8000"
+    depends_on:
+      bench-init:
+        condition: service_completed_successfully
+
 volumes:
   postgres_data:
   app_data:
+  s3_data:

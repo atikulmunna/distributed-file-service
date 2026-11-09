@@ -76,6 +76,7 @@ class S3ChunkStorage(ChunkStorage):
         endpoint_url: str | None = None,
         access_key_id: str | None = None,
         secret_access_key: str | None = None,
+        path_style: bool = False,
     ) -> None:
         if not bucket:
             raise ValueError("bucket must be set for s3-compatible backends")
@@ -88,6 +89,10 @@ class S3ChunkStorage(ChunkStorage):
         if access_key_id and secret_access_key:
             client_kwargs["aws_access_key_id"] = access_key_id
             client_kwargs["aws_secret_access_key"] = secret_access_key
+        if path_style:
+            from botocore.config import Config
+
+            client_kwargs["config"] = Config(s3={"addressing_style": "path"})
         self.client = boto3.client("s3", **client_kwargs)
 
     def chunk_key(self, upload_id: str, chunk_index: int) -> str:
@@ -161,7 +166,14 @@ def build_storage() -> ChunkStorage:
     if backend == "local":
         return LocalChunkStorage(settings.storage_root)
     if backend == "s3":
-        return S3ChunkStorage(settings.s3_bucket, settings.aws_region)
+        # A custom endpoint (S3-compatible server) needs path-style addressing: bucket in the path,
+        # not in the hostname. Credentials come from the standard AWS_* environment variables.
+        return S3ChunkStorage(
+            settings.s3_bucket,
+            settings.aws_region,
+            endpoint_url=settings.s3_endpoint_url or None,
+            path_style=bool(settings.s3_endpoint_url),
+        )
     if backend == "r2":
         if not settings.r2_bucket:
             raise ValueError("r2_bucket must be set when storage_backend=r2")

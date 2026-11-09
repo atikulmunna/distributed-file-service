@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     storage_backend: str = "local"
     storage_root: str = "./data"
     s3_bucket: str = ""
+    s3_endpoint_url: str = ""
     aws_region: str = "us-east-1"
     r2_bucket: str = ""
     r2_account_id: str = ""

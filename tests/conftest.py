@@ -38,23 +38,10 @@ os.environ.update(
 )
 
 
-def _ensure_postgres_database(url: str) -> None:
-    from sqlalchemy import create_engine, text
-    from sqlalchemy.engine import make_url
-
-    target = make_url(url)
-    admin = create_engine(target.set(database="postgres"), isolation_level="AUTOCOMMIT")
-    try:
-        with admin.connect() as conn:
-            exists = conn.scalar(text("SELECT 1 FROM pg_database WHERE datname = :name"), {"name": target.database})
-            if not exists:
-                conn.execute(text(f'CREATE DATABASE "{target.database}"'))
-    finally:
-        admin.dispose()
-
-
 if _TEST_DATABASE_URL.startswith("postgresql"):
-    _ensure_postgres_database(_TEST_DATABASE_URL)
+    from scripts.bench_init import ensure_postgres_database
+
+    ensure_postgres_database(_TEST_DATABASE_URL)
 
 from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy import text  # noqa: E402
