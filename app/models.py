@@ -2,7 +2,7 @@ import enum
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -22,6 +22,11 @@ class ChunkStatus(str, enum.Enum):
     failed = "FAILED"
 
 
+# 64-bit autoincrement key. SQLite only autoincrements a column declared exactly INTEGER
+# PRIMARY KEY (its 64-bit rowid), so SQLite gets INTEGER; everything else gets BIGINT.
+BIGINT_PK = BigInteger().with_variant(Integer, "sqlite")
+
+
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -32,8 +37,8 @@ class Upload(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     owner_id: Mapped[str] = mapped_column(String(128), nullable=False, default="legacy")
     file_name: Mapped[str] = mapped_column(Text, nullable=False)
-    file_size: Mapped[int] = mapped_column(Integer, nullable=False)
-    chunk_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    file_size: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    chunk_size: Mapped[int] = mapped_column(BigInteger, nullable=False)
     total_chunks: Mapped[int] = mapped_column(Integer, nullable=False)
     file_checksum_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default=UploadStatus.initiated.value)
@@ -51,7 +56,7 @@ class Chunk(Base):
         Index("idx_chunks_upload_status", "upload_id", "status"),
     )
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BIGINT_PK, primary_key=True, autoincrement=True)
     upload_id: Mapped[str] = mapped_column(String(36), ForeignKey("uploads.id", ondelete="CASCADE"), nullable=False)
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -83,7 +88,7 @@ class ChunkRequestIdempotency(Base):
         UniqueConstraint("upload_id", "chunk_index", "idempotency_key", name="uq_chunk_idempotency"),
     )
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BIGINT_PK, primary_key=True, autoincrement=True)
     upload_id: Mapped[str] = mapped_column(String(36), ForeignKey("uploads.id", ondelete="CASCADE"), nullable=False)
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
     idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)

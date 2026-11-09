@@ -47,17 +47,6 @@ def _completed_upload(client: TestClient, headers: dict, body: bytes, file_name:
     return upload_id
 
 
-@pytest.mark.skipif(engine.dialect.name != "postgresql", reason="32-bit INTEGER overflow only exists on Postgres")
-@known_bug(5)
-def test_file_over_2gib_persists(client, auth_headers) -> None:
-    response = client.post(
-        "/v1/uploads/init",
-        json={"file_name": "big.bin", "file_size": 3 * 1024**3},
-        headers=auth_headers,
-    )
-    assert response.status_code == 201
-
-
 @known_bug(6)
 def test_chunk_size_must_match_layout(client, auth_headers) -> None:
     upload_id = _init(client, auth_headers, 10, 5)

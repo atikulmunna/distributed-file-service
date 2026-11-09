@@ -1,8 +1,9 @@
 import hashlib
 
+import pytest
 from fastapi.testclient import TestClient
 
-from app.db import SessionLocal
+from app.db import SessionLocal, engine
 from app.main import app, upload_limiter
 from app.models import Chunk, ChunkRequestIdempotency, CompleteRequestIdempotency, Upload
 from app.worker import executor
@@ -364,3 +365,16 @@ def test_file_checksum_validated_on_complete_mismatch() -> None:
         complete = client.post(f"/v1/uploads/{upload_id}/complete")
         assert complete.status_code == 409
         assert "checksum mismatch" in complete.text
+
+
+@pytest.mark.skipif(engine.dialect.name != "postgresql", reason="32-bit INTEGER overflow only exists on Postgres")
+def test_file_over_2gib_persists(client, auth_headers) -> None:
+    file_size = 3 * 1024**3
+    response = client.post(
+        "/v1/uploads/init",
+        json={"file_name": "big.bin", "file_size": file_size},
+        headers=auth_headers,
+    )
+    assert response.status_code == 201, response.text
+    with SessionLocal() as db:
+        assert db.get(Upload, response.json()["upload_id"]).file_size == file_size
