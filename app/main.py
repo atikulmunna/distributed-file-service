@@ -9,6 +9,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.config import settings, validate_production_settings
@@ -67,6 +68,7 @@ setup_tracing(app)
 app.include_router(ops.router)
 app.include_router(console.router)
 app.include_router(uploads.router)
+app.mount("/static", StaticFiles(directory=console.STATIC_DIR), name="static")
 
 
 def _upload_id(request: Request) -> str | None:
@@ -139,6 +141,7 @@ async def request_context_and_logging(request: Request, call_next):
     response.headers["X-Request-ID"] = request_id
     response.headers["X-DFS-App-Version"] = settings.app_version
     response.headers["X-DFS-Instance"] = INSTANCE_ID
+    response.headers["X-Content-Type-Options"] = "nosniff"  # browsers use the declared type, never a guess
     http_request_duration_seconds.labels(
         method=request.method,
         route=_route_label(request),

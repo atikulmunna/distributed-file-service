@@ -1,15 +1,36 @@
-"""Browser console pages."""
+"""The browser UI: one static page (app/static) that talks to the JSON API. No build step (D4)."""
+
+from pathlib import Path
 
 from fastapi import APIRouter
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse
 
-from app.ui import ui_html
+STATIC_DIR = Path(__file__).resolve().parents[1] / "static"
+
+# The page loads only its own script and stylesheet and talks only to this origin. No inline code is
+# allowed, so injected markup could not run even if some text were ever inserted as HTML.
+CONTENT_SECURITY_POLICY = "; ".join(
+    [
+        "default-src 'self'",
+        "script-src 'self'",
+        "style-src 'self'",
+        "img-src 'self' data:",
+        "connect-src 'self'",
+        "base-uri 'none'",
+        "form-action 'self'",
+        "frame-ancestors 'none'",
+    ]
+)
 
 router = APIRouter()
 
 
-@router.get("/", response_class=HTMLResponse)
-@router.get("/ui", response_class=HTMLResponse)
-@router.get("/console", response_class=HTMLResponse)
-def web_console() -> HTMLResponse:
-    return HTMLResponse(content=ui_html())
+@router.get("/", include_in_schema=True)
+@router.get("/ui", include_in_schema=True)
+@router.get("/console", include_in_schema=True)
+def web_console() -> FileResponse:
+    return FileResponse(
+        STATIC_DIR / "index.html",
+        media_type="text/html; charset=utf-8",
+        headers={"Content-Security-Policy": CONTENT_SECURITY_POLICY, "Cache-Control": "no-cache"},
+    )
