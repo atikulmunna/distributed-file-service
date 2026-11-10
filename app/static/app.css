@@ -337,3 +337,5 @@ tbody tr[data-upload]:hover, tbody tr[aria-selected="true"] { background: var(--
 @media (prefers-reduced-motion: reduce) {
   .cell { transition: none; }
 }
+
+.events li[data-tone="warn"] span { color: var(--sending); }

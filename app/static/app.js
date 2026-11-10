@@ -5,8 +5,10 @@
 const $ = (id) => document.getElementById(id);
 
 const MAX_CELLS = 1000; // above this, one cell stands for a group of chunks
-const WHOLE_FILE_HASH_LIMIT = 256 * 1024 * 1024; // hashed in memory by this page
 const THROUGHPUT_WINDOW_MS = 10_000;
+const MAX_ATTEMPTS = 5; // per request: the first try and up to four retries
+const MAX_RETRY_WAIT_S = 10; // a longer Retry-After is shortened to this
+const SAMPLE_CHECKS = 3; // chunks re-hashed before resuming, to catch a different file with the same name
 
 const state = {
   apiKey: "",
@@ -18,6 +20,8 @@ const state = {
   uploadsCursor: null,
   selectedUploadId: null,
   statsAt: null,
+  resumeCandidate: null, // an unfinished upload of the chosen file, from this browser's records
+  pageId: "",
 };
 
 // ---------------------------------------------------------------- formatting
@@ -72,6 +76,25 @@ function hex(buffer) {
   return Array.from(new Uint8Array(buffer), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function fnv1a(text) {
+  // 64-bit FNV-1a as hex: a stable name for a string when Web Crypto is unavailable (not a security hash).
+  let hash = 0xcbf29ce484222325n;
+  for (const byte of new TextEncoder().encode(text)) {
+    hash ^= BigInt(byte);
+    hash = (hash * 0x100000001b3n) & 0xffffffffffffffffn;
+  }
+  return hash.toString(16).padStart(16, "0");
+}
+
+async function textDigest(text) {
+  if (!perChunkChecksums()) return fnv1a(text);
+  return hex(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text))).slice(0, 32);
+}
+
 function randomId() {
   const bytes = crypto.getRandomValues(new Uint8Array(16)); // available outside secure contexts too
   return hex(bytes.buffer);
@@ -105,8 +128,10 @@ function show(node, visible) {
 function addEvent(text, tone = "") {
   const list = $("events");
   const now = new Date();
-  list.prepend(el("li", { dataset: { tone } }, el("time", { datetime: now.toISOString(), text: clockTime(now) }), el("span", { text })));
+  const message = el("span", { text });
+  list.prepend(el("li", { dataset: { tone } }, el("time", { datetime: now.toISOString(), text: clockTime(now) }), message));
   while (list.children.length > 60) list.lastElementChild.remove();
+  return message;
 }
 
 function describeFailure(error) {
@@ -185,6 +210,133 @@ async function api(method, path, { body, headers = {}, auth = true, allowError =
     });
   }
   return { status: response.status, body: payload, instance: response.headers.get("X-DFS-Instance") || "" };
+}
+
+// ---------------------------------------------------------------- retries
+
+function retryWait(error, attempt) {
+  // Seconds to wait before trying again, or null when trying again cannot help.
+  if (error.status === 429 || error.status === 503) {
+    const asked = Number(error.retryAfter);
+    return Math.min(MAX_RETRY_WAIT_S, Number.isFinite(asked) && asked > 0 ? asked : 1);
+  }
+  if (error.status === 0 || error.status >= 500) {
+    return Math.random() * Math.min(8, 0.5 * 2 ** (attempt - 1)); // backoff with full jitter
+  }
+  return null; // other 4xx answers are final: the request itself must change
+}
+
+async function countdown(prefix, seconds, nextAttempt) {
+  const line = addEvent("", "warn");
+  const end = performance.now() + seconds * 1000;
+  for (;;) {
+    const left = Math.max(0, Math.ceil((end - performance.now()) / 1000));
+    line.textContent = `${prefix} Retrying in ${left} s (attempt ${nextAttempt} of ${MAX_ATTEMPTS}).`;
+    if (performance.now() >= end) break;
+    await sleep(Math.min(1000, end - performance.now()));
+  }
+  line.textContent = `${prefix} Retried (attempt ${nextAttempt} of ${MAX_ATTEMPTS}).`;
+}
+
+async function withRetries(label, run) {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await run();
+    } catch (error) {
+      if (!(error instanceof ApiError)) throw error;
+      const wait = attempt < MAX_ATTEMPTS ? retryWait(error, attempt) : null;
+      if (wait === null) throw error;
+      const what = error.status === 429 ? "throttled" : "failed";
+      await countdown(`${label} ${what}: ${describeFailure(error)}.`, wait, attempt + 1);
+    }
+  }
+}
+
+// ---------------------------------------------------------------- this browser's record of its uploads
+
+function storageGet(key) {
+  try {
+    return JSON.parse(localStorage.getItem(key) || "null");
+  } catch {
+    return null; // storage refused (private window) or unreadable: behave as if empty
+  }
+}
+
+function storageSet(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value));
+  } catch {
+    // storage refused: resuming after a reload then needs Your uploads instead
+  }
+}
+
+function browserId() {
+  let id = storageGet("dfs-browser-id");
+  if (!id) {
+    id = state.pageId || randomId();
+    state.pageId = id;
+    storageSet("dfs-browser-id", id);
+  }
+  return id;
+}
+
+async function fileFingerprint(file) {
+  return textDigest(`${file.name}|${file.size}|${file.lastModified}`);
+}
+
+function rememberUpload(fingerprint, uploadId) {
+  const records = storageGet("dfs-uploads") || {};
+  records[fingerprint] = { uploadId, savedAt: Date.now() };
+  const newest = Object.entries(records)
+    .sort((a, b) => b[1].savedAt - a[1].savedAt)
+    .slice(0, 50);
+  storageSet("dfs-uploads", Object.fromEntries(newest));
+}
+
+function forgetUpload(fingerprint) {
+  const records = storageGet("dfs-uploads") || {};
+  delete records[fingerprint];
+  storageSet("dfs-uploads", records);
+}
+
+async function findResumable(file) {
+  // The upload this browser started for this exact file (name, size, modification time), if the
+  // server says it can still receive chunks.
+  const fingerprint = await fileFingerprint(file);
+  const record = (storageGet("dfs-uploads") || {})[fingerprint];
+  if (!record || !state.apiKey) return null;
+  try {
+    const detail = (await api("GET", `/v1/uploads/${record.uploadId}`)).body;
+    if (["INITIATED", "IN_PROGRESS"].includes(detail.status)) return detail;
+    if (detail.status !== "COMPLETING" && detail.status !== "VERIFYING") forgetUpload(fingerprint);
+  } catch (error) {
+    if (error.status === 404) forgetUpload(fingerprint);
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------- whole-file SHA-256, off the main thread
+
+function hashFile(file, onProgress) {
+  // A Web Worker reads the file in slices and hashes them incrementally (hash-wasm), so even a
+  // file of several GB is never held in memory and the page stays responsive.
+  return new Promise((resolve, reject) => {
+    const worker = new Worker("/static/hash-worker.js");
+    worker.onmessage = (event) => {
+      const message = event.data;
+      if (message.type === "progress") onProgress(message.done, message.total);
+      else {
+        worker.terminate();
+        if (message.type === "done") resolve(message.sha256);
+        else reject(new Error(message.message));
+      }
+    };
+    worker.onerror = (event) => {
+      worker.terminate();
+      reject(new Error(event.message || "the hashing worker failed"));
+    };
+    worker.postMessage({ file });
+  });
 }
 
 // ---------------------------------------------------------------- header: which server, is it ready
@@ -302,16 +454,6 @@ function choosePlan(file, limits, parallelism) {
   return { chunkSize, totalChunks, parallelism: Math.max(1, Math.min(parallelism, allowed, totalChunks || 1)) };
 }
 
-function matchingUnfinishedUpload(file) {
-  // The newest listed upload of this file (same name and size) that can still receive chunks.
-  for (const upload of state.uploads.values()) {
-    if (upload.file_name === file.name && upload.file_size === file.size && ["INITIATED", "IN_PROGRESS"].includes(upload.status)) {
-      return upload;
-    }
-  }
-  return null;
-}
-
 function updatePlan() {
   const planNode = $("plan");
   const problemNode = $("plan-problem");
@@ -332,10 +474,6 @@ function updatePlan() {
     wholeBox.disabled = true;
     wholeBox.checked = false;
     $("whole-checksum-hint").textContent = "Checksums need a secure page (HTTPS or localhost); this page is not one.";
-  } else if (file && file.size > WHOLE_FILE_HASH_LIMIT) {
-    wholeBox.disabled = true;
-    wholeBox.checked = false;
-    $("whole-checksum-hint").textContent = `This page hashes the whole file in memory, so the option is limited to files up to ${formatBytes(WHOLE_FILE_HASH_LIMIT)}.`;
   } else {
     wholeBox.disabled = false;
   }
@@ -369,7 +507,7 @@ function updatePlan() {
   show(planNode, true);
   start.disabled = Boolean(state.job && state.job.running);
 
-  const existing = matchingUnfinishedUpload(file);
+  const existing = state.resumeCandidate;
   if (existing && !(state.job && state.job.running)) {
     resume.textContent = `Resume upload (${existing.uploaded_chunks} of ${existing.total_chunks} chunks already on server)`;
     resume.dataset.upload = existing.upload_id;
@@ -384,8 +522,16 @@ function onFileChosen() {
   summary.replaceChildren();
   if (file) summary.append(el("strong", { text: file.name }), `, ${formatBytes(file.size)}`);
   else summary.textContent = "No file chosen.";
+  state.resumeCandidate = null;
   updatePlan();
   if (state.selectedUploadId) renderDetailActions();
+  if (file) {
+    findResumable(file).then((candidate) => {
+      if (state.file !== file) return; // another file was chosen meanwhile
+      state.resumeCandidate = candidate;
+      updatePlan();
+    });
+  }
 }
 
 // ---------------------------------------------------------------- throughput, measured in this browser
@@ -555,7 +701,7 @@ async function sendChunk(job, index) {
   paintCells(job);
   const started = performance.now();
   try {
-    await api("PUT", `/v1/uploads/${job.uploadId}/chunks/${index}`, { body: data, headers });
+    await withRetries(`Chunk ${index}`, () => api("PUT", `/v1/uploads/${job.uploadId}/chunks/${index}`, { body: data, headers }));
   } catch (error) {
     job.sending.delete(index);
     throw error;
@@ -573,6 +719,18 @@ async function transfer(job, indexes) {
   buildChunkMap(job);
   await refreshFromServer(job);
   selectCell(0);
+  if (job.resuming) {
+    const differs = await sampleMismatch(job);
+    if (differs !== null) {
+      job.running = false;
+      addEvent(
+        `The chosen file does not match this upload: chunk ${differs} differs from what the server stored. Nothing was sent. Needs your action: choose the original file.`,
+        "bad",
+      );
+      updatePlan();
+      return;
+    }
+  }
   const queue = indexes.filter((index) => job.server.get(index)?.status !== "UPLOADED");
   if (queue.length) addEvent(`Sending ${formatCount(queue.length, "chunk")}, ${job.parallelism} at a time.`);
   const ticker = setInterval(() => {
@@ -606,10 +764,28 @@ async function transfer(job, indexes) {
   await complete(job);
 }
 
+async function sampleMismatch(job) {
+  // Re-hash a few chunks the server already holds (first, last and one at random) from the chosen
+  // file and compare with the server's SHA-256: a different file with the same name and size is
+  // caught before anything is sent. Returns the first differing chunk index, or null.
+  if (!perChunkChecksums()) return null;
+  const stored = [...job.server.values()].filter((chunk) => chunk.status === "UPLOADED" && chunk.sha256);
+  if (!stored.length) return null;
+  const picks = new Set([stored[0], stored[stored.length - 1], stored[Math.floor(Math.random() * stored.length)]]);
+  for (const chunk of [...picks].slice(0, SAMPLE_CHECKS)) {
+    const start = chunk.index * job.chunkSize;
+    const data = await job.file.slice(start, start + chunk.size_bytes).arrayBuffer();
+    if (hex(await crypto.subtle.digest("SHA-256", data)) !== chunk.sha256) return chunk.index;
+  }
+  return null;
+}
+
 async function complete(job) {
   addEvent("All chunks sent. Asking the server to complete the upload.");
   try {
-    const result = await api("POST", `/v1/uploads/${job.uploadId}/complete`, { headers: { "Idempotency-Key": `complete-${job.uploadId}` } });
+    const result = await withRetries("Completing", () =>
+      api("POST", `/v1/uploads/${job.uploadId}/complete`, { headers: { "Idempotency-Key": `complete-${job.uploadId}` } }),
+    );
     if (result.body.status === "VERIFYING") {
       addEvent("The server is comparing the stored file with the declared SHA-256.");
       await waitWhileVerifying(job.uploadId);
@@ -634,8 +810,20 @@ async function waitWhileVerifying(uploadId) {
   return "VERIFYING";
 }
 
-async function sha256OfFile(file) {
-  return hex(await crypto.subtle.digest("SHA-256", await file.arrayBuffer()));
+async function hashWithProgress(file) {
+  const line = addEvent("Computing the file's SHA-256 in this browser: 0%.");
+  const sha = await hashFile(file, (done, total) => {
+    line.textContent = `Computing the file's SHA-256 in this browser: ${Math.floor((done / total) * 100)}%.`;
+  });
+  line.textContent = `Computed the file's SHA-256 in this browser: ${sha.slice(0, 12)}.`;
+  return sha;
+}
+
+async function initKey(file, chunkSize, verified, generation = "") {
+  // The same file, chunk size and checksum mode in this browser always send the same key, so
+  // starting again after a reload finds the existing upload instead of creating a second one.
+  const fingerprint = await fileFingerprint(file);
+  return `init-${fingerprint}-${chunkSize}-${verified ? "v" : "n"}-${browserId().slice(0, 16)}${generation}`;
 }
 
 async function startUpload() {
@@ -643,15 +831,28 @@ async function startUpload() {
   const plan = state.plan;
   if (!file || !plan) return;
   $("start-upload").disabled = true;
+  const verified = $("whole-checksum").checked;
   const body = { file_name: file.name, file_size: file.size, chunk_size: plan.chunkSize };
   try {
-    if ($("whole-checksum").checked) {
-      addEvent("Computing the file's SHA-256 in this browser.");
-      body.file_checksum_sha256 = await sha256OfFile(file);
+    if (verified) body.file_checksum_sha256 = await hashWithProgress(file);
+    const send = (key) => withRetries("Starting the upload", () => api("POST", "/v1/uploads/init", { body, headers: { "Idempotency-Key": key } }));
+    let init = await send(await initKey(file, plan.chunkSize, verified));
+    if (init.body.status === "ABORTED" || init.body.status === "FAILED") {
+      addEvent(`This browser's earlier upload of this file ended ${init.body.status}; starting a new one.`);
+      init = await send(await initKey(file, plan.chunkSize, verified, `-${randomId().slice(0, 8)}`));
     }
-    const init = await api("POST", "/v1/uploads/init", { body, headers: { "Idempotency-Key": `init-${randomId()}` } });
     const upload = { ...init.body, file_name: file.name, file_size: file.size };
-    addEvent(`Upload ${shortId(upload.upload_id)} created on the server: ${formatCount(upload.total_chunks, "chunk")} of ${formatBytes(upload.chunk_size)}.`);
+    rememberUpload(await fileFingerprint(file), upload.upload_id);
+    if (upload.status === "COMPLETED") {
+      addEvent(`This file is already uploaded (upload ${shortId(upload.upload_id)}, COMPLETED). Nothing was sent.`, "good");
+      await afterChange(upload.upload_id);
+      return;
+    }
+    if (upload.status !== "INITIATED") {
+      addEvent(`Continuing upload ${shortId(upload.upload_id)} that this browser started earlier (${upload.status}).`);
+    } else {
+      addEvent(`Upload ${shortId(upload.upload_id)} created on the server: ${formatCount(upload.total_chunks, "chunk")} of ${formatBytes(upload.chunk_size)}.`);
+    }
     const job = newJob(upload, file, plan.parallelism);
     await transfer(job, [...Array(upload.total_chunks).keys()]);
   } catch (error) {
@@ -672,6 +873,7 @@ async function resumeUpload(uploadId) {
     const parallelism = Math.max(1, Math.min(Number($("parallelism").value) || 1, state.limits.max_inflight_chunks_per_upload));
     addEvent(`Resuming upload ${shortId(uploadId)}: ${detail.uploaded_chunks} of ${detail.total_chunks} chunks are already on the server.`);
     const job = newJob(detail, file, parallelism);
+    job.resuming = true;
     await transfer(job, [...Array(detail.total_chunks).keys()]);
   } catch (error) {
     addEvent(`Resuming failed: ${describeFailure(error)}.`, "bad");

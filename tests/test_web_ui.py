@@ -1,5 +1,6 @@
 """The browser UI: static files served by the API (D4: no build step), and the rules it must keep."""
 
+import hashlib
 import re
 from pathlib import Path
 
@@ -62,6 +63,23 @@ def test_page_has_no_inline_script_or_style() -> None:
     assert "<style" not in page
     assert " style=" not in page
     assert re.search(r"\son[a-z]+=", page) is None  # no onclick= and similar
+
+
+def test_vendored_hash_wasm_matches_its_recorded_checksum() -> None:
+    vendor = STATIC / "vendor" / "hash-wasm"
+    recorded = re.search(
+        r"`sha256\.umd\.min\.js` SHA-256: `([0-9a-f]{64})`", (vendor / "README.md").read_text(encoding="utf-8")
+    )
+    assert recorded, "the vendor README must record the file's SHA-256"
+    assert hashlib.sha256((vendor / "sha256.umd.min.js").read_bytes()).hexdigest() == recorded.group(1)
+    assert (vendor / "LICENSE").is_file()
+
+
+def test_hash_worker_is_served(client) -> None:
+    worker = client.get("/static/hash-worker.js")
+    assert worker.status_code == 200
+    assert "javascript" in worker.headers["content-type"]
+    assert 'importScripts("/static/vendor/hash-wasm/sha256.umd.min.js")' in worker.text
 
 
 def test_version_route_available(client) -> None:

@@ -2,15 +2,17 @@
 
 import json
 import logging
+import os
 import socket
 import uuid
 
 from fastapi import Request
 from opentelemetry import trace
 
-# Identifies this process in logs and in the X-DFS-Instance response header (hostname is the
-# container id under Docker; the suffix tells apart processes on one host).
-INSTANCE_ID = f"{socket.gethostname()}-{uuid.uuid4().hex[:6]}"
+# Identifies this process in logs, in the X-DFS-Instance response header and in /ready and /v1/stats.
+# INSTANCE_NAME (a pod or service name, say) replaces the hostname, which is the container id under
+# Docker; the random suffix tells apart processes on one host.
+INSTANCE_ID = f"{os.getenv('INSTANCE_NAME') or socket.gethostname()}-{uuid.uuid4().hex[:6]}"
 
 request_logger = logging.getLogger("dfs.request")
 if not request_logger.handlers:

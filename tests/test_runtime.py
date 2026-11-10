@@ -1,8 +1,13 @@
 """Process-level behavior: graceful shutdown of the storage pool and bounded metric labels."""
 
+import os
+import socket
+import subprocess
+import sys
 import threading
 import time
 
+import pytest
 from fastapi.testclient import TestClient
 
 import app.main as main_module
@@ -53,6 +58,19 @@ def test_shutdown_drains_the_storage_pool(monkeypatch) -> None:
         assert client.get("/health").status_code == 200
         assert calls == []  # only on shutdown
     assert calls == [settings.shutdown_drain_seconds]
+
+
+@pytest.mark.parametrize(("name", "prefix"), [("web-1", "web-1-"), ("", None)])
+def test_instance_name_can_replace_the_hostname(name, prefix) -> None:
+    # The instance ID is fixed at import, so check it in a fresh interpreter.
+    env = {**os.environ, "INSTANCE_NAME": name}
+    probe = "from app.logging_utils import INSTANCE_ID; print(INSTANCE_ID)"
+    instance = subprocess.run(
+        [sys.executable, "-c", probe], env=env, capture_output=True, text=True, check=True
+    ).stdout.strip()
+    expected = prefix or f"{socket.gethostname()}-"
+    assert instance.startswith(expected), instance
+    assert len(instance) == len(expected) + 6  # the suffix still tells processes on one host apart
 
 
 def test_framework_errors_use_the_error_envelope(client) -> None:
