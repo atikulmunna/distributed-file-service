@@ -8,6 +8,7 @@ import pytest
 
 from app import signed_urls
 from app.config import Settings, settings, validate_production_settings
+from app.ratelimit import rate_limiter
 
 DATA = b"0123456789"
 OTHER_USER = {"X-API-Key": "other-key"}
@@ -92,6 +93,17 @@ def test_download_url_requires_an_owned_completed_upload(client, auth_headers) -
     upload_id = _completed(client, auth_headers)
     assert client.post(f"/v1/uploads/{upload_id}/download-url", headers=OTHER_USER).status_code == 404
     assert client.post(f"/v1/uploads/{upload_id}/download-url").status_code == 401
+
+
+def test_download_link_spends_the_owners_rate_limit(client, auth_headers, monkeypatch) -> None:
+    upload_id = _completed(client, auth_headers)
+    path = _link(client, auth_headers, upload_id)
+    monkeypatch.setattr(settings, "api_rate_limit_per_minute", 1)
+    rate_limiter.reset()  # a fresh window: the owner has one request left
+    assert client.get(path).status_code == 200
+    blocked = client.get(path)  # no API key, but the link spends its owner's budget
+    assert blocked.status_code == 429
+    assert blocked.headers["Retry-After"] == "60"
 
 
 def test_signed_download_link_is_not_logged(client, auth_headers, caplog) -> None:
