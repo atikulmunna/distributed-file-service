@@ -1,0 +1,2 @@
+# Vendored files are kept byte for byte: their recorded checksums must hold on every checkout.
+app/static/vendor/** -text
