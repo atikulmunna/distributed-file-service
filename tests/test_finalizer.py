@@ -3,7 +3,7 @@ file and moves the upload to COMPLETED or FAILED."""
 
 import hashlib
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 from botocore.exceptions import EndpointConnectionError
 from fastapi.testclient import TestClient
@@ -28,7 +28,12 @@ def _upload(client, headers, data: bytes = DATA, checksum: str | None = None) ->
     assert init.status_code == 201, init.text
     upload_id = init.json()["upload_id"]
     for index in range(0, len(data), 5):
-        assert client.put(f"/v1/uploads/{upload_id}/chunks/{index // 5}", content=data[index : index + 5], headers=headers).status_code == 202
+        assert (
+            client.put(
+                f"/v1/uploads/{upload_id}/chunks/{index // 5}", content=data[index : index + 5], headers=headers
+            ).status_code
+            == 202
+        )
     return upload_id
 
 
@@ -64,7 +69,8 @@ def test_complete_with_checksum_returns_202_verifying(client, auth_headers) -> N
     upload_id = _verifying(client, auth_headers, GOOD)
     assert _state(upload_id) == ("VERIFYING", None)
     reservation = job_queue.reserve(timeout_s=0.1)
-    assert reservation is not None and reservation.job == FinalizeJob(upload_id)
+    assert reservation is not None
+    assert reservation.job == FinalizeJob(upload_id)
 
 
 def test_complete_replay_while_verifying_returns_202(client, auth_headers) -> None:
@@ -88,7 +94,8 @@ def test_status_endpoint(client, auth_headers) -> None:
     assert response.json() == {"upload_id": upload_id, "status": "VERIFYING", "failure_reason": None}
     process(FinalizeJob(upload_id))
     body = client.get(f"/v1/uploads/{upload_id}", headers=auth_headers).json()
-    assert body["status"] == "FAILED" and body["failure_reason"].startswith("file checksum mismatch")
+    assert body["status"] == "FAILED"
+    assert body["failure_reason"].startswith("file checksum mismatch")
     assert client.get(f"/v1/uploads/{upload_id}", headers={"X-API-Key": "other-key"}).status_code == 404
 
 
@@ -156,7 +163,8 @@ def test_finalizer_holds_no_db_connection_while_hashing(client, auth_headers, mo
 
     monkeypatch.setattr(storage, "iter_range", observed)
     process(FinalizeJob(upload_id))
-    assert held and set(held) == {0}
+    assert held
+    assert set(held) == {0}
 
 
 def test_worker_retries_a_storage_failure_then_completes(client, auth_headers, monkeypatch) -> None:
@@ -177,7 +185,8 @@ def test_worker_retries_a_storage_failure_then_completes(client, auth_headers, m
     handle(job_queue, first, retry_delay_s=0)
     assert _state(upload_id)[0] == "VERIFYING"  # released for another attempt, not failed
     second = job_queue.reserve(timeout_s=0.5)
-    assert second is not None and second.job == FinalizeJob(upload_id, attempt=1)
+    assert second is not None
+    assert second.job == FinalizeJob(upload_id, attempt=1)
     handle(job_queue, second, retry_delay_s=0)
     assert _state(upload_id) == ("COMPLETED", None)
     assert job_queue.reserve(timeout_s=0.05) is None
@@ -205,12 +214,13 @@ def test_lost_job_is_requeued_by_sweep(client, auth_headers) -> None:
     upload_id = _verifying(client, auth_headers, GOOD)
     job_queue.clear()  # the enqueue was lost (for example the queue was down)
     with SessionLocal() as db:
-        stale = datetime.now(timezone.utc) - timedelta(seconds=settings.job_lease_seconds + 60)
+        stale = datetime.now(UTC) - timedelta(seconds=settings.job_lease_seconds + 60)
         db.execute(update(Upload).where(Upload.id == upload_id).values(updated_at=stale))
         db.commit()
     assert sweep_lost_jobs(job_queue) == 1
     reservation = job_queue.reserve(timeout_s=0.1)
-    assert reservation is not None and reservation.job.upload_id == upload_id
+    assert reservation is not None
+    assert reservation.job.upload_id == upload_id
     assert sweep_lost_jobs(job_queue) == 0  # the sweep touched it, so it is not requeued again
 
 

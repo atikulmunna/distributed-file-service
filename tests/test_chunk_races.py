@@ -15,7 +15,9 @@ from app.storage import storage
 
 def _new_upload(client, headers, file_size: int, chunk_size: int) -> str:
     response = client.post(
-        "/v1/uploads/init", json={"file_name": "f.bin", "file_size": file_size, "chunk_size": chunk_size}, headers=headers
+        "/v1/uploads/init",
+        json={"file_name": "f.bin", "file_size": file_size, "chunk_size": chunk_size},
+        headers=headers,
     )
     assert response.status_code == 201, response.text
     return response.json()["upload_id"]
@@ -57,7 +59,9 @@ def test_parallel_puts_of_same_chunk_all_succeed(client, auth_headers, slow_stor
     statuses: list[int] = []
 
     def put() -> None:
-        statuses.append(client.put(f"/v1/uploads/{upload_id}/chunks/0", content=b"abcde", headers=auth_headers).status_code)
+        statuses.append(
+            client.put(f"/v1/uploads/{upload_id}/chunks/0", content=b"abcde", headers=auth_headers).status_code
+        )
 
     threads = [threading.Thread(target=put) for _ in range(4)]
     for thread in threads:
@@ -97,9 +101,11 @@ def test_commit_failure_after_write_leaves_chunk_missing(client, auth_headers) -
     def fail(conn, cursor, parameters) -> None:
         raise RuntimeError("simulated crash between storage write and DB commit")
 
-    with before_statement("INSERT INTO chunks ", fail) as injection:
-        with TestClient(app, raise_server_exceptions=False) as tolerant:
-            first = tolerant.put(f"/v1/uploads/{upload_id}/chunks/0", content=b"aaaaa", headers=auth_headers)
+    with (
+        before_statement("INSERT INTO chunks ", fail) as injection,
+        TestClient(app, raise_server_exceptions=False) as tolerant,
+    ):
+        first = tolerant.put(f"/v1/uploads/{upload_id}/chunks/0", content=b"aaaaa", headers=auth_headers)
     assert injection.fired
     assert first.status_code == 500
     assert _chunk_rows(upload_id) == []

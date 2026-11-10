@@ -5,7 +5,7 @@ from app.ranges import ByteRange, RangeNotSatisfiable, parse_range
 
 
 @pytest.mark.parametrize(
-    "header, expected",
+    ("header", "expected"),
     [
         (None, None),
         ("", None),
@@ -28,7 +28,9 @@ def test_parse_range_table(header, expected) -> None:
     assert parse_range(header, 10) == expected
 
 
-@pytest.mark.parametrize("header, size", [("bytes=10-", 10), ("bytes=10-20", 10), ("bytes=-0", 10), ("bytes=0-", 0), ("bytes=-5", 0)])
+@pytest.mark.parametrize(
+    ("header", "size"), [("bytes=10-", 10), ("bytes=10-20", 10), ("bytes=-0", 10), ("bytes=0-", 0), ("bytes=-5", 0)]
+)
 def test_unsatisfiable_ranges_raise(header, size) -> None:
     with pytest.raises(RangeNotSatisfiable):
         parse_range(header, size)

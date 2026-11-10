@@ -1,14 +1,14 @@
 """Deterministic concurrency for tests: run an action inside the server's own DB transaction,
 right before a matching SQL statement executes."""
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import event
 
 from app.db import engine
 
 
-class before_statement:  # noqa: N801  (used as a context manager, reads like a phrase)
+class before_statement:  # lowercase on purpose: used as a context manager, reads like a phrase
     """Run `action(conn, cursor, parameters)` once, right before the first statement whose SQL starts
     with `prefix` (case-insensitive) and for which `match(parameters)` is true."""
 
@@ -40,5 +40,5 @@ def raw_insert(conn, cursor, table: str, columns: list[str], values: tuple) -> N
 
 
 def db_now(conn):
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     return now.strftime("%Y-%m-%d %H:%M:%S.%f") if conn.dialect.name == "sqlite" else now

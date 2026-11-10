@@ -3,7 +3,7 @@ import hashlib
 import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 from app.config import settings
@@ -87,7 +87,7 @@ class ChunkStorage:
 
     def abort_upload(self, upload_id: str, multipart_upload_id: str | None) -> None:
         """Discard an unfinished multipart upload. No-op when there is none."""
-        return None
+        return
 
     def object_exists(self, key: str) -> bool:
         raise NotImplementedError
@@ -187,7 +187,7 @@ class LocalChunkStorage(ChunkStorage):
         return [
             StoredObject(
                 key=str(path.relative_to(self.root)).replace("\\", "/"),
-                last_modified=datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc),
+                last_modified=datetime.fromtimestamp(path.stat().st_mtime, tz=UTC),
             )
             for path in base.rglob("*")
             if path.is_file()
@@ -268,7 +268,9 @@ class S3ChunkStorage(ChunkStorage):
         checksum = self._checksum_params(data, sha256_hex)
         if not multipart_upload_id:  # a one-chunk upload is a plain object
             key = self.chunk_key(upload_id, chunk_index)
-            put_result = self.client.put_object(Bucket=self.bucket, Key=key, Body=data, **checksum, **self._sse_params())
+            put_result = self.client.put_object(
+                Bucket=self.bucket, Key=key, Body=data, **checksum, **self._sse_params()
+            )
             return StorageWriteResult(key=key, etag=put_result.get("ETag"))
 
         # One write per chunk: the part only. It has no object of its own; the chunk's key is the

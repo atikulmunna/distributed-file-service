@@ -133,9 +133,7 @@ def test_chunk_idempotency_key_replay_does_not_duplicate_rows() -> None:
         with SessionLocal() as db:
             total_chunks = db.query(Chunk).filter(Chunk.upload_id == upload_id).count()
             total_chunk_idempotency = (
-                db.query(ChunkRequestIdempotency)
-                .filter(ChunkRequestIdempotency.upload_id == upload_id)
-                .count()
+                db.query(ChunkRequestIdempotency).filter(ChunkRequestIdempotency.upload_id == upload_id).count()
             )
             assert total_chunks == 1
             assert total_chunk_idempotency == 1
@@ -196,9 +194,7 @@ def test_complete_idempotency_replay() -> None:
 
         with SessionLocal() as db:
             total_complete_idempotency = (
-                db.query(CompleteRequestIdempotency)
-                .filter(CompleteRequestIdempotency.upload_id == upload_id)
-                .count()
+                db.query(CompleteRequestIdempotency).filter(CompleteRequestIdempotency.upload_id == upload_id).count()
             )
             assert total_complete_idempotency == 1
 

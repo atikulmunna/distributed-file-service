@@ -65,7 +65,9 @@ def object_pieces(upload: Upload, chunks: list[Chunk], layout: ChunkLayout, star
     for index in range(layout.chunk_for_offset(start), layout.chunk_for_offset(end) + 1):
         chunk_start = layout.chunk_start(index)
         chunk_end = chunk_start + layout.expected_size(index) - 1
-        pieces.append(Piece(by_index[index].s3_key, max(start, chunk_start) - chunk_start, min(end, chunk_end) - chunk_start))
+        pieces.append(
+            Piece(by_index[index].s3_key, max(start, chunk_start) - chunk_start, min(end, chunk_end) - chunk_start)
+        )
     return pieces
 
 

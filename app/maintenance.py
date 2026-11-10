@@ -72,7 +72,9 @@ def cleanup_lock() -> Iterator[bool]:
 def _error(stats: dict, step: str, exc: Exception, **context) -> None:
     stats["errors"] += 1
     cleanup_errors_total.labels(step=step).inc()
-    log_event({"event": "cleanup_error", "step": step, "error_class": type(exc).__name__, "detail": str(exc), **context})
+    log_event(
+        {"event": "cleanup_error", "step": step, "error_class": type(exc).__name__, "detail": str(exc), **context}
+    )
 
 
 def _uses_assembled_objects() -> bool:
@@ -125,7 +127,7 @@ def _clean_stale_uploads(now: datetime, stats: dict) -> None:
             try:
                 storage.abort_upload(upload_id, multipart_upload_id)
                 stats["multipart_uploads_aborted"] += 1
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001  reported; the row is kept so the next run retries
                 _error(stats, "abort_multipart", exc, upload_id=upload_id)
                 continue  # keep the row: it is the only reference to the parts; the next run retries
         if _uses_assembled_objects():
@@ -134,8 +136,10 @@ def _clean_stale_uploads(now: datetime, stats: dict) -> None:
             try:
                 storage.delete_key(key)
                 stats["storage_keys_deleted"] += 1
-            except Exception as exc:
-                _error(stats, "delete_object", exc, upload_id=upload_id, key=key)  # an orphan now; a later run removes it
+            except Exception as exc:  # noqa: BLE001  reported; an orphan now, a later run removes it
+                _error(
+                    stats, "delete_object", exc, upload_id=upload_id, key=key
+                )  # an orphan now; a later run removes it
         with SessionLocal() as db:
             stats["stale_uploads_deleted"] += db.execute(delete(Upload).where(Upload.id == upload_id)).rowcount or 0
             db.commit()
@@ -145,7 +149,9 @@ def _clean_idempotency(now: datetime, stats: dict) -> None:
     before = now - timedelta(seconds=settings.idempotency_ttl_seconds)
     with SessionLocal() as db:
         for model in (InitRequestIdempotency, ChunkRequestIdempotency, CompleteRequestIdempotency):
-            stats["idempotency_rows_deleted"] += db.execute(delete(model).where(model.created_at < before)).rowcount or 0
+            stats["idempotency_rows_deleted"] += (
+                db.execute(delete(model).where(model.created_at < before)).rowcount or 0
+            )
         db.commit()
 
 
@@ -157,7 +163,7 @@ def _clean_orphans(now: datetime, stats: dict) -> None:
             referenced.update(storage.assembled_key(upload_id) for upload_id in db.scalars(select(Upload.id)))
     try:
         objects = storage.list_objects("uploads/")
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001  reported; this step is skipped until the next run
         _error(stats, "list_objects", exc)
         return
     for stored in objects:
@@ -166,7 +172,7 @@ def _clean_orphans(now: datetime, stats: dict) -> None:
         try:
             storage.delete_key(stored.key)
             stats["orphans_deleted"] += 1
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001  reported; continue with the next orphan
             _error(stats, "delete_object", exc, key=stored.key)
 
 
@@ -204,7 +210,7 @@ def cleanup_once() -> dict:
         for step in (_clean_stale_uploads, _clean_idempotency, _clean_orphans, _report_stuck_verifications):
             try:
                 step(now, stats)
-            except Exception as exc:  # one failing step must not stop the others
+            except Exception as exc:  # noqa: BLE001  one failing step must not stop the others
                 _error(stats, step.__name__.lstrip("_"), exc)
     log_event({"event": "cleanup_finished", **stats})
     return stats

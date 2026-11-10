@@ -1,8 +1,8 @@
 from fastapi.testclient import TestClient
 
-from app.ratelimit import rate_limiter
 from app.config import settings
 from app.main import app
+from app.ratelimit import rate_limiter
 
 
 def test_api_key_rate_limit_enforced() -> None:

@@ -26,7 +26,8 @@ def test_redis_enqueue_reserve_ack(stream) -> None:
     assert queue.ping() is True
     queue.enqueue(FinalizeJob("u1"))
     reservation = queue.reserve(timeout_s=1)
-    assert reservation is not None and reservation.job == FinalizeJob("u1")
+    assert reservation is not None
+    assert reservation.job == FinalizeJob("u1")
     queue.ack(reservation)
     assert queue.reserve(timeout_s=0.2) is None
 
@@ -40,7 +41,8 @@ def test_redis_stream_redelivers_after_lease(stream) -> None:
     assert survivor.reserve(timeout_s=0.2) is None  # still leased
     time.sleep(1.2)
     second = survivor.reserve(timeout_s=1)  # XAUTOCLAIM hands it to worker-b
-    assert second is not None and second.job == FinalizeJob("u1")
+    assert second is not None
+    assert second.job == FinalizeJob("u1")
     survivor.ack(second)
     assert survivor.reserve(timeout_s=0.2) is None
 
@@ -51,6 +53,7 @@ def test_redis_release_requeues_with_attempt(stream) -> None:
     reservation = queue.reserve(timeout_s=1)
     queue.release(reservation, delay_s=0, job=FinalizeJob("u1", attempt=1))
     again = queue.reserve(timeout_s=1)
-    assert again is not None and again.job == FinalizeJob("u1", attempt=1)
+    assert again is not None
+    assert again.job == FinalizeJob("u1", attempt=1)
     queue.ack(again)
     assert queue.reserve(timeout_s=0.2) is None

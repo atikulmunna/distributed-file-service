@@ -41,7 +41,9 @@ class InMemoryRateLimiter(RateLimiter):
         cutoff = now - window_s
         with self._lock:
             if now >= self._next_sweep:
-                self._events = {user: events for user, events in self._events.items() if events and events[-1] >= cutoff}
+                self._events = {
+                    user: events for user, events in self._events.items() if events and events[-1] >= cutoff
+                }
                 self._next_sweep = now + window_s
             events = self._events.setdefault(principal, deque())
             while events and events[0] < cutoff:

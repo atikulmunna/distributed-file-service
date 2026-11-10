@@ -10,7 +10,8 @@ def test_enqueue_reserve_ack() -> None:
     queue = MemoryJobQueue(lease_seconds=60)
     queue.enqueue(FinalizeJob("u1"))
     reservation = queue.reserve(timeout_s=0.1)
-    assert reservation is not None and reservation.job == FinalizeJob("u1")
+    assert reservation is not None
+    assert reservation.job == FinalizeJob("u1")
     queue.ack(reservation)
     assert queue.reserve(timeout_s=0.05) is None
 
@@ -26,7 +27,8 @@ def test_reserve_wakes_up_when_a_job_arrives() -> None:
     queue = MemoryJobQueue(lease_seconds=60)
     threading.Timer(0.05, lambda: queue.enqueue(FinalizeJob("late"))).start()
     reservation = queue.reserve(timeout_s=2)
-    assert reservation is not None and reservation.job.upload_id == "late"
+    assert reservation is not None
+    assert reservation.job.upload_id == "late"
 
 
 def test_unacked_job_is_redelivered() -> None:
@@ -37,7 +39,8 @@ def test_unacked_job_is_redelivered() -> None:
     assert queue.reserve(timeout_s=0.02) is None  # leased to the first worker
     time.sleep(0.12)  # that worker died: the lease expires
     second = queue.reserve(timeout_s=0.1)
-    assert second is not None and second.job.upload_id == "u1"
+    assert second is not None
+    assert second.job.upload_id == "u1"
     assert second.token != first.token
     queue.ack(second)
     queue.ack(first)  # a late ack from the dead worker is harmless
@@ -51,7 +54,8 @@ def test_release_redelivers_after_the_delay() -> None:
     queue.release(reservation, delay_s=0.1, job=FinalizeJob("u1", attempt=1))
     assert queue.reserve(timeout_s=0.02) is None
     again = queue.reserve(timeout_s=0.5)
-    assert again is not None and again.job == FinalizeJob("u1", attempt=1)
+    assert again is not None
+    assert again.job == FinalizeJob("u1", attempt=1)
 
 
 def test_ping_and_clear() -> None:
@@ -96,8 +100,17 @@ def test_sqs_queue_calls(monkeypatch) -> None:
 
     assert reservation == Reservation(FinalizeJob("u1"), "rh-1")
     names = [name for name, _ in calls]
-    assert names == ["send_message", "receive_message", "change_message_visibility", "send_message", "delete_message", "delete_message"]
+    assert names == [
+        "send_message",
+        "receive_message",
+        "change_message_visibility",
+        "send_message",
+        "delete_message",
+        "delete_message",
+    ]
     receive = calls[1][1]
-    assert receive["VisibilityTimeout"] == 300 and receive["WaitTimeSeconds"] == 20
+    assert receive["VisibilityTimeout"] == 300
+    assert receive["WaitTimeSeconds"] == 20
     assert calls[2][1]["VisibilityTimeout"] == 5
-    assert calls[3][1]["DelaySeconds"] == 8 and FinalizeJob.from_json(calls[3][1]["MessageBody"]).attempt == 1
+    assert calls[3][1]["DelaySeconds"] == 8
+    assert FinalizeJob.from_json(calls[3][1]["MessageBody"]).attempt == 1

@@ -4,17 +4,12 @@ Delay before retry n (0-based) is uniform in [0, min(max_delay_s, base_delay_s *
 spreads retries from many clients over the whole window instead of synchronizing them.
 """
 
-from __future__ import annotations
-
 import random
 import time
 from collections.abc import Callable
-from typing import TypeVar
-
-T = TypeVar("T")
 
 
-def call_with_retry(
+def call_with_retry[T](
     fn: Callable[[], T],
     *,
     attempts: int,

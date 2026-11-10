@@ -11,7 +11,9 @@ from app.models import Chunk
 from app.storage import storage
 
 MIB = 1024 * 1024
-S3_SMALL_PART_REASON = "chunk_size must be at least 5 MiB (5242880 bytes) when an upload has more than one chunk on the s3 backend"
+S3_SMALL_PART_REASON = (
+    "chunk_size must be at least 5 MiB (5242880 bytes) when an upload has more than one chunk on the s3 backend"
+)
 
 
 def _init(client, headers, file_size: int, chunk_size: int | None, file_name: str = "f.bin"):
@@ -105,7 +107,9 @@ def test_missing_content_length_411(client, auth_headers) -> None:
 def test_complete_rejects_size_sum_mismatch(client, auth_headers) -> None:
     upload_id = _new_upload(client, auth_headers, 10, 5)
     for index, body in enumerate((b"aaaaa", b"bbbbb")):
-        assert client.put(f"/v1/uploads/{upload_id}/chunks/{index}", content=body, headers=auth_headers).status_code == 202
+        assert (
+            client.put(f"/v1/uploads/{upload_id}/chunks/{index}", content=body, headers=auth_headers).status_code == 202
+        )
     with SessionLocal() as db:  # a row written before layout checks existed
         db.execute(update(Chunk).where(Chunk.upload_id == upload_id, Chunk.chunk_index == 1).values(size_bytes=3))
         db.commit()
@@ -183,10 +187,12 @@ def test_slow_body_times_out_without_holding_slot(client, auth_headers, monkeypa
             return {"type": "http.request", "body": b"ab", "more_body": True}
         limiter_counts_while_stalled.append(upload_limiter._counts.get(upload_id, 0))
         await asyncio.Event().wait()  # the client never sends the rest
+        return {"type": "http.disconnect"}
 
     status = _run_asgi(_chunk_put_scope(upload_id, 5), receive, timeout_s=5.0)
     assert status == 408
-    assert limiter_counts_while_stalled and set(limiter_counts_while_stalled) == {0}
+    assert limiter_counts_while_stalled
+    assert set(limiter_counts_while_stalled) == {0}
     assert upload_limiter._counts.get(upload_id, 0) == 0
     assert _chunk_rows(upload_id) == 0
 

@@ -157,9 +157,7 @@ def init_upload(
     upload_id = str(uuid.uuid4())
     multipart_upload_id = None
     use_multipart = (
-        settings.storage_backend.lower() in ("s3", "r2")
-        and total_chunks > 1
-        and chunk_size >= MIN_MULTIPART_PART_SIZE
+        settings.storage_backend.lower() in ("s3", "r2") and total_chunks > 1 and chunk_size >= MIN_MULTIPART_PART_SIZE
     )
     if use_multipart:
         multipart_upload_id = with_storage_retries(lambda: storage.initialize_upload(upload_id), "upload init")
@@ -222,7 +220,9 @@ async def _read_chunk_body(request: Request, size: int, timeout_s: float) -> byt
             pieces.append(piece)
             received += len(piece)
             if received > size:
-                raise HTTPException(status_code=400, detail=f"chunk body is longer than its Content-Length of {size} bytes")
+                raise HTTPException(
+                    status_code=400, detail=f"chunk body is longer than its Content-Length of {size} bytes"
+                )
 
     try:
         await asyncio.wait_for(read_all(), timeout=timeout_s)
@@ -243,7 +243,10 @@ async def _read_chunk_body(request: Request, size: int, timeout_s: float) -> byt
     status_code=202,
     responses={
         **COMMON_ERROR_RESPONSES,
-        400: {"model": ErrorResponse, "description": "Validation error, including a size that does not match the layout"},
+        400: {
+            "model": ErrorResponse,
+            "description": "Validation error, including a size that does not match the layout",
+        },
         404: {"model": ErrorResponse, "description": "Upload not found"},
         408: {"model": ErrorResponse, "description": "Chunk body not received in time"},
         409: {"model": ErrorResponse, "description": "State/idempotency conflict"},
@@ -307,7 +310,10 @@ async def upload_chunk(
     response_model=CompleteUploadResponse,
     responses={
         **COMMON_ERROR_RESPONSES,
-        202: {"model": CompleteUploadResponse, "description": "Accepted: whole-file checksum verification in progress (VERIFYING)"},
+        202: {
+            "model": CompleteUploadResponse,
+            "description": "Accepted: whole-file checksum verification in progress (VERIFYING)",
+        },
         404: {"model": ErrorResponse, "description": "Upload not found"},
         409: {"model": ErrorResponse, "description": "State/idempotency conflict"},
     },

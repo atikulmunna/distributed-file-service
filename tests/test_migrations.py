@@ -16,7 +16,9 @@ from sqlalchemy.engine import make_url
 from app.config import settings
 from app.db import engine
 
-pytestmark = pytest.mark.skipif(engine.dialect.name != "postgresql", reason="column type migrations are Postgres-specific")
+pytestmark = pytest.mark.skipif(
+    engine.dialect.name != "postgresql", reason="column type migrations are Postgres-specific"
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MIGRATION_DB = "dfs_migration_test"

@@ -6,7 +6,7 @@ import logging
 import os
 import threading
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi.testclient import TestClient
@@ -20,7 +20,7 @@ from app.maintenance import CLEANUP_LOCK_KEY, cleanup_once
 from app.models import Chunk, Upload
 from app.storage import storage
 
-OLD = datetime.now(timezone.utc) - timedelta(days=2)
+OLD = datetime.now(UTC) - timedelta(days=2)
 
 
 def _upload(client, headers, chunks: int = 1) -> str:
@@ -30,7 +30,9 @@ def _upload(client, headers, chunks: int = 1) -> str:
     assert response.status_code == 201, response.text
     upload_id = response.json()["upload_id"]
     for index in range(chunks):
-        assert client.put(f"/v1/uploads/{upload_id}/chunks/{index}", content=b"aaaaa", headers=headers).status_code == 202
+        assert (
+            client.put(f"/v1/uploads/{upload_id}/chunks/{index}", content=b"aaaaa", headers=headers).status_code == 202
+        )
     return upload_id
 
 
@@ -82,11 +84,11 @@ def test_last_activity_moves_with_chunks_and_transitions(client, auth_headers) -
     assert client.put(f"/v1/uploads/{upload_id}/chunks/0", content=b"aaaaa", headers=auth_headers).status_code == 202
     with SessionLocal() as db:
         after_chunk = db.get(Upload, upload_id).last_activity_at
-    assert after_chunk.replace(tzinfo=timezone.utc) > OLD + timedelta(days=1)
+    assert after_chunk.replace(tzinfo=UTC) > OLD + timedelta(days=1)
     _set(upload_id, last_activity_at=OLD)
     assert client.post(f"/v1/uploads/{upload_id}/complete", headers=auth_headers).status_code == 200
     with SessionLocal() as db:
-        assert db.get(Upload, upload_id).last_activity_at.replace(tzinfo=timezone.utc) > OLD + timedelta(days=1)
+        assert db.get(Upload, upload_id).last_activity_at.replace(tzinfo=UTC) > OLD + timedelta(days=1)
 
 
 @pytest.mark.parametrize("status", ["FAILED", "ABORTED", "COMPLETING", "INITIATED"])
@@ -103,7 +105,8 @@ def test_completed_and_verifying_uploads_are_never_cleaned(client, auth_headers)
     _set(completed, status="COMPLETED", last_activity_at=OLD)
     _set(verifying, status="VERIFYING", last_activity_at=OLD)
     stats = cleanup_once()
-    assert _exists(completed) and _exists(verifying)
+    assert _exists(completed)
+    assert _exists(verifying)
     assert stats["uploads_stuck_verifying"] == 1  # reported for alerting, never deleted
 
 

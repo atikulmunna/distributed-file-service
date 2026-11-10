@@ -12,7 +12,7 @@ def test_jwt_mode_accepts_valid_bearer_token() -> None:
     old_aud = settings.jwt_audience
     old_iss = settings.jwt_issuer
     settings.auth_mode = "jwt"
-    settings.jwt_secret = "test-secret"
+    settings.jwt_secret = "test-secret-at-least-32-bytes-long"  # HS256 needs 32 or more
     settings.jwt_algorithm = "HS256"
     settings.jwt_audience = ""
     settings.jwt_issuer = ""
@@ -37,7 +37,7 @@ def test_jwt_mode_rejects_invalid_token() -> None:
     old_mode = settings.auth_mode
     old_secret = settings.jwt_secret
     settings.auth_mode = "jwt"
-    settings.jwt_secret = "test-secret"
+    settings.jwt_secret = "test-secret-at-least-32-bytes-long"  # HS256 needs 32 or more
     try:
         with TestClient(app) as client:
             response = client.post(

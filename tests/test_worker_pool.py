@@ -3,6 +3,7 @@
 import re
 from pathlib import Path
 
+import pytest
 from fastapi import HTTPException
 
 from app.worker import BackpressureExecutor
@@ -23,10 +24,7 @@ def test_pool_runs_submitted_work() -> None:
 
 def test_pool_rejects_when_the_queue_is_full() -> None:
     pool = BackpressureExecutor(workers=1, queue_maxsize=0, global_inflight_limit=4)
-    try:
+    with pytest.raises(HTTPException) as rejected:
         pool.submit(lambda: None)
-    except HTTPException as exc:
-        assert exc.status_code == 429
-        assert exc.headers["X-RateLimit-Reason"] == "queue_full"
-    else:
-        raise AssertionError("a full queue must reject with 429")
+    assert rejected.value.status_code == 429
+    assert rejected.value.headers["X-RateLimit-Reason"] == "queue_full"

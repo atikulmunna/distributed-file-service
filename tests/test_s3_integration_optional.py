@@ -11,7 +11,7 @@ import hashlib
 import os
 import sys
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from botocore.exceptions import ClientError
@@ -59,7 +59,8 @@ def s3_backend(monkeypatch, s3):
         if name.startswith("app.") and getattr(module, "storage", None) is default_storage:
             monkeypatch.setattr(module, "storage", s3)
             swapped.append(name)
-    assert "app.download" in swapped and "app.chunk_service" in swapped, swapped
+    assert "app.download" in swapped, swapped
+    assert "app.chunk_service" in swapped, swapped
     return s3
 
 
@@ -108,8 +109,11 @@ def test_s3compat_multipart_round_trip(client, auth_headers, s3_backend) -> None
         download = client.get(f"/v1/uploads/{upload_id}/download", headers=auth_headers)
         assert download.status_code == 200
         assert hashlib.sha256(download.content).hexdigest() == hashlib.sha256(data).hexdigest()
-        ranged = client.get(f"/v1/uploads/{upload_id}/download", headers={**auth_headers, "Range": "bytes=5242870-5242890"})
-        assert ranged.status_code == 206 and ranged.content == data[5242870:5242891]
+        ranged = client.get(
+            f"/v1/uploads/{upload_id}/download", headers={**auth_headers, "Range": "bytes=5242870-5242890"}
+        )
+        assert ranged.status_code == 206
+        assert ranged.content == data[5242870:5242891]
 
         # one write per chunk: the only object is the assembled file, exactly the file's size
         assert _objects(s3_backend, upload_id) == {s3_backend.assembled_key(upload_id): len(data)}
@@ -123,7 +127,9 @@ def test_s3compat_rejects_bad_part_checksum(s3) -> None:
     multipart_upload_id = s3.initialize_upload(upload_id)
     try:
         with pytest.raises(ClientError) as raised:
-            s3.write_chunk(upload_id, 0, b"x" * MIB, multipart_upload_id, sha256_hex=hashlib.sha256(b"other").hexdigest())
+            s3.write_chunk(
+                upload_id, 0, b"x" * MIB, multipart_upload_id, sha256_hex=hashlib.sha256(b"other").hexdigest()
+            )
         assert raised.value.response["Error"]["Code"] in ("BadDigest", "InvalidDigest", "XAmzContentChecksumMismatch")
     finally:
         s3.abort_upload(upload_id, multipart_upload_id)
@@ -132,10 +138,15 @@ def test_s3compat_rejects_bad_part_checksum(s3) -> None:
 def test_s3compat_abort_discards_everything(client, auth_headers, s3_backend) -> None:
     data = os.urandom(2 * 5 * MIB)
     init = client.post(
-        "/v1/uploads/init", json={"file_name": "abort.bin", "file_size": len(data), "chunk_size": 5 * MIB}, headers=auth_headers
+        "/v1/uploads/init",
+        json={"file_name": "abort.bin", "file_size": len(data), "chunk_size": 5 * MIB},
+        headers=auth_headers,
     )
     upload_id = init.json()["upload_id"]
-    assert client.put(f"/v1/uploads/{upload_id}/chunks/0", content=data[: 5 * MIB], headers=auth_headers).status_code == 202
+    assert (
+        client.put(f"/v1/uploads/{upload_id}/chunks/0", content=data[: 5 * MIB], headers=auth_headers).status_code
+        == 202
+    )
     assert len(_pending_multipart(s3_backend, upload_id)) == 1
 
     assert client.delete(f"/v1/uploads/{upload_id}", headers=auth_headers).status_code == 200
@@ -163,7 +174,7 @@ def test_s3compat_completion_retry_after_assembly_succeeds(client, auth_headers,
             db.execute(
                 update(Upload)
                 .where(Upload.id == upload_id)
-                .values(status="COMPLETING", updated_at=datetime.now(timezone.utc) - timedelta(minutes=5))
+                .values(status="COMPLETING", updated_at=datetime.now(UTC) - timedelta(minutes=5))
             )
             db.commit()
         retry = client.post(f"/v1/uploads/{upload_id}/complete", headers=auth_headers)
@@ -178,16 +189,19 @@ def test_s3compat_cleanup_aborts_an_abandoned_multipart_upload(client, auth_head
 
     data = os.urandom(2 * 5 * MIB)
     init = client.post(
-        "/v1/uploads/init", json={"file_name": "gone.bin", "file_size": len(data), "chunk_size": 5 * MIB}, headers=auth_headers
+        "/v1/uploads/init",
+        json={"file_name": "gone.bin", "file_size": len(data), "chunk_size": 5 * MIB},
+        headers=auth_headers,
     )
     upload_id = init.json()["upload_id"]
-    assert client.put(f"/v1/uploads/{upload_id}/chunks/0", content=data[: 5 * MIB], headers=auth_headers).status_code == 202
+    assert (
+        client.put(f"/v1/uploads/{upload_id}/chunks/0", content=data[: 5 * MIB], headers=auth_headers).status_code
+        == 202
+    )
     assert len(_pending_multipart(s3_backend, upload_id)) == 1
     with SessionLocal() as db:  # the client went away two days ago
         db.execute(
-            update(Upload)
-            .where(Upload.id == upload_id)
-            .values(last_activity_at=datetime.now(timezone.utc) - timedelta(days=2))
+            update(Upload).where(Upload.id == upload_id).values(last_activity_at=datetime.now(UTC) - timedelta(days=2))
         )
         db.commit()
 

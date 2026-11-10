@@ -75,7 +75,9 @@ def claim_completion(
             existing = db.get(CompleteRequestIdempotency, idempotency_key)
             if existing:
                 if existing.request_fingerprint != fingerprint:
-                    raise HTTPException(status_code=409, detail="idempotency key reused with different complete payload")
+                    raise HTTPException(
+                        status_code=409, detail="idempotency key reused with different complete payload"
+                    )
                 return CompletionReplay(CompleteUploadResponse(upload_id=upload_id, status=upload.status), False)
 
         status = upload.status
@@ -118,9 +120,7 @@ def claim_completion(
             raise HTTPException(
                 status_code=409, detail=f"chunk sizes add up to {stored_bytes} bytes, expected {upload.file_size}"
             )
-        multipart_upload_id = (
-            upload.multipart_upload_id if settings.storage_backend.lower() in ("s3", "r2") else None
-        )
+        multipart_upload_id = upload.multipart_upload_id if settings.storage_backend.lower() in ("s3", "r2") else None
         if multipart_upload_id and any(not chunk.s3_etag for chunk in chunks):
             raise HTTPException(status_code=409, detail="cannot complete upload, missing S3 part etag")
         work = CompletionWork(
@@ -144,7 +144,7 @@ def _part(chunk: Chunk) -> dict:
 def _assembled(upload_id: str) -> bool:
     try:
         return storage.object_exists(storage.assembled_key(upload_id))
-    except Exception:
+    except Exception:  # noqa: BLE001  unsure counts as not assembled, so the caller re-raises the original error
         return False
 
 
@@ -187,7 +187,7 @@ def finish_completion(upload_id: str, idempotency_key: str | None, fingerprint: 
         if verify:
             try:
                 job_queue.enqueue(FinalizeJob(upload_id))
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001  logged; the VERIFYING sweep re-enqueues a lost job
                 log_event({"event": "verification_enqueue_error", "upload_id": upload_id, "detail": str(exc)})
         return target.value
     with SessionLocal() as db:
@@ -230,10 +230,10 @@ def discard_storage(work: AbortWork) -> None:
     """Best effort: anything left behind is removed later by cleanup."""
     try:
         storage.abort_upload(work.upload_id, work.multipart_upload_id)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001  best effort; cleanup removes anything left behind
         log_event({"event": "abort_cleanup_error", "upload_id": work.upload_id, "detail": str(exc)})
     for key in sorted(set(work.chunk_keys)):
         try:
             storage.delete_key(key)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001  best effort; cleanup removes anything left behind
             log_event({"event": "abort_cleanup_error", "upload_id": work.upload_id, "key": key, "detail": str(exc)})

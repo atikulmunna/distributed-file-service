@@ -9,7 +9,6 @@ from app.config import settings
 from app.main import app
 from app.storage import S3ChunkStorage
 
-
 RUN_R2_INTEGRATION = os.getenv("RUN_R2_INTEGRATION") == "1"
 R2_BUCKET = os.getenv("R2_BUCKET", "")
 R2_ACCOUNT_ID = os.getenv("R2_ACCOUNT_ID", "")
@@ -18,11 +17,7 @@ R2_SECRET_ACCESS_KEY = os.getenv("R2_SECRET_ACCESS_KEY", "")
 
 
 @pytest.mark.skipif(
-    not RUN_R2_INTEGRATION
-    or not R2_BUCKET
-    or not R2_ACCOUNT_ID
-    or not R2_ACCESS_KEY_ID
-    or not R2_SECRET_ACCESS_KEY,
+    not RUN_R2_INTEGRATION or not R2_BUCKET or not R2_ACCOUNT_ID or not R2_ACCESS_KEY_ID or not R2_SECRET_ACCESS_KEY,
     reason="Set RUN_R2_INTEGRATION=1 and R2_* env vars to run API-level Cloudflare R2 integration tests.",
 )
 def test_api_r2_full_upload_download_flow(monkeypatch) -> None:

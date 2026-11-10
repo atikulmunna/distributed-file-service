@@ -77,7 +77,9 @@ def test_concurrent_slow_uploads_exceeding_db_pool_do_not_deadlock(live_server, 
 
 def _start_parallel_puts(client: TestClient, headers: dict, upload_id: str, count: int, statuses: list[int]):
     def put(index: int) -> None:
-        statuses.append(client.put(f"/v1/uploads/{upload_id}/chunks/{index}", content=b"x" * 10, headers=headers).status_code)
+        statuses.append(
+            client.put(f"/v1/uploads/{upload_id}/chunks/{index}", content=b"x" * 10, headers=headers).status_code
+        )
 
     threads = [threading.Thread(target=put, args=(i,)) for i in range(count)]
     for thread in threads:

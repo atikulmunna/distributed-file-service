@@ -17,13 +17,17 @@ NAME = "রিপোর্ট.txt"  # Bengali "report"
 
 def _completed(client, headers, data: bytes, chunk_size: int, file_name: str = "f.bin") -> str:
     init = client.post(
-        "/v1/uploads/init", json={"file_name": file_name, "file_size": len(data), "chunk_size": chunk_size}, headers=headers
+        "/v1/uploads/init",
+        json={"file_name": file_name, "file_size": len(data), "chunk_size": chunk_size},
+        headers=headers,
     )
     assert init.status_code == 201, init.text
     upload_id = init.json()["upload_id"]
     for index in range(0, len(data), chunk_size):
         response = client.put(
-            f"/v1/uploads/{upload_id}/chunks/{index // chunk_size}", content=data[index : index + chunk_size], headers=headers
+            f"/v1/uploads/{upload_id}/chunks/{index // chunk_size}",
+            content=data[index : index + chunk_size],
+            headers=headers,
         )
         assert response.status_code == 202, response.text
     assert client.post(f"/v1/uploads/{upload_id}/complete", headers=headers).status_code == 200
@@ -115,7 +119,8 @@ def test_range_near_end_reads_only_needed_bytes(client, auth_headers, monkeypatc
     upload_id = _completed(client, auth_headers, data, 5)  # chunks of 5: offsets 0, 5, 10, 15
     reads = _spy_iter_range(monkeypatch)
     response = _get(client, auth_headers, upload_id, "bytes=17-19")
-    assert response.status_code == 206 and response.content == data[17:20]
+    assert response.status_code == 206
+    assert response.content == data[17:20]
     assert reads == [(f"uploads/{upload_id}/chunk_3", 2, 4)]  # one streaming ranged read per piece
 
 
@@ -132,7 +137,8 @@ def test_parallel_mode_also_reads_only_needed_bytes(client, auth_headers, monkey
 
     monkeypatch.setattr(storage, "read_range", spy)
     response = _get(client, auth_headers, upload_id, "bytes=17-19")
-    assert response.status_code == 206 and response.content == data[17:20]
+    assert response.status_code == 206
+    assert response.content == data[17:20]
     assert reads == [(f"uploads/{upload_id}/chunk_3", 2, 4)]
 
 
@@ -140,7 +146,8 @@ def test_range_across_chunk_boundaries(client, auth_headers) -> None:
     data = bytes(range(23))
     upload_id = _completed(client, auth_headers, data, 5)
     response = _get(client, auth_headers, upload_id, "bytes=3-21")
-    assert response.status_code == 206 and response.content == data[3:22]
+    assert response.status_code == 206
+    assert response.content == data[3:22]
 
 
 def test_no_db_connection_held_while_streaming(client, auth_headers, monkeypatch) -> None:
@@ -154,7 +161,8 @@ def test_no_db_connection_held_while_streaming(client, auth_headers, monkeypatch
 
     monkeypatch.setattr(storage, "iter_range", observed)
     assert _get(client, auth_headers, upload_id).status_code == 200
-    assert held and set(held) == {0}
+    assert held
+    assert set(held) == {0}
 
 
 def test_object_pieces_for_chunk_files_and_assembled_objects(monkeypatch) -> None:

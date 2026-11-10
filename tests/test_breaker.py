@@ -5,6 +5,7 @@ import time
 
 import pytest
 from botocore.exceptions import ClientError, EndpointConnectionError
+from fastapi import HTTPException
 
 from app.config import settings
 from app.storage import storage
@@ -96,10 +97,14 @@ def test_breaker_opens_after_threshold_and_fails_fast(client, auth_headers, monk
         raise EndpointConnectionError(endpoint_url="http://s3")
 
     monkeypatch.setattr(storage, "write_chunk", unreachable)
-    init = client.post("/v1/uploads/init", json={"file_name": "f.bin", "file_size": 5, "chunk_size": 5}, headers=auth_headers)
+    init = client.post(
+        "/v1/uploads/init", json={"file_name": "f.bin", "file_size": 5, "chunk_size": 5}, headers=auth_headers
+    )
     upload_id = init.json()["upload_id"]
     for _ in range(3):
-        assert client.put(f"/v1/uploads/{upload_id}/chunks/0", content=b"aaaaa", headers=auth_headers).status_code == 503
+        assert (
+            client.put(f"/v1/uploads/{upload_id}/chunks/0", content=b"aaaaa", headers=auth_headers).status_code == 503
+        )
     assert calls["n"] == 3
 
     started = time.perf_counter()
@@ -123,7 +128,7 @@ def test_breaker_stops_retries_once_it_opens(monkeypatch) -> None:
         calls["n"] += 1
         raise EndpointConnectionError(endpoint_url="http://s3")
 
-    with pytest.raises(Exception) as raised:
+    with pytest.raises(HTTPException) as raised:
         with_storage_retries(unreachable, "test")
     assert calls["n"] == 3  # the breaker opened on the third failure; the remaining retries were skipped
     assert raised.value.status_code == 503
@@ -139,8 +144,9 @@ def test_a_permanent_error_through_the_policy_keeps_the_breaker_closed(monkeypat
         raise denied
 
     for _ in range(3):
-        with pytest.raises(Exception):
+        with pytest.raises(HTTPException) as raised:
             with_storage_retries(forbidden, "test")
+        assert raised.value.status_code == 500
     assert storage_breaker.state == "closed"
 
 

@@ -41,11 +41,14 @@ class BreakerOpenError(Exception):
 
 
 class StorageCircuitBreaker:
-    def __init__(self, failure_threshold: int, open_seconds: float, clock: Callable[[], float] = time.monotonic) -> None:
+    def __init__(
+        self, failure_threshold: int, open_seconds: float, clock: Callable[[], float] = time.monotonic
+    ) -> None:
         self.failure_threshold = failure_threshold
         self.open_seconds = open_seconds
         self._clock = clock
         self._lock = threading.Lock()
+        self.state = "closed"
         self.reset()
 
     def reset(self) -> None:
@@ -56,7 +59,7 @@ class StorageCircuitBreaker:
             self._probe_in_flight = False
 
     def _set_state(self, state: str) -> None:
-        if getattr(self, "state", None) != state and getattr(self, "state", None) is not None:
+        if self.state != state:
             log_event({"event": "storage_breaker", "from": self.state, "to": state})
         self.state = state
         storage_breaker_state.set(_STATE_VALUE[state])
@@ -113,7 +116,7 @@ class StorageCircuitBreaker:
 storage_breaker = StorageCircuitBreaker(settings.breaker_failure_threshold, settings.breaker_open_seconds)
 
 
-def with_storage_retries(
+def with_storage_retries[T](
     fn: Callable[[], T], operation: str, on_retry: Callable[[Exception], None] | None = None
 ) -> T:
     def attempt() -> T:
@@ -129,7 +132,9 @@ def with_storage_retries(
         return result
 
     def report_retry(exc: Exception) -> None:
-        log_event({"event": "storage_retry", "operation": operation, "error_class": type(exc).__name__, "detail": str(exc)})
+        log_event(
+            {"event": "storage_retry", "operation": operation, "error_class": type(exc).__name__, "detail": str(exc)}
+        )
         if on_retry is not None:
             on_retry(exc)
 

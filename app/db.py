@@ -1,4 +1,5 @@
-from collections.abc import Generator
+from collections.abc import Callable, Generator
+from typing import Any
 
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
@@ -31,20 +32,22 @@ if settings.database_url.startswith("sqlite"):
         cursor = dbapi_connection.cursor()
         cursor.execute("PRAGMA foreign_keys=ON")
         cursor.close()
+
+
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, class_=Session)
 
 
-def dialect_insert(session: Session):
+def dialect_insert(session: Session) -> Callable[[Any], Any]:
     """The INSERT construct for the session's database; it supports ON CONFLICT clauses."""
     dialect = session.get_bind().dialect.name
     if dialect == "postgresql":
-        from sqlalchemy.dialects.postgresql import insert
+        from sqlalchemy.dialects.postgresql import insert as postgres_insert
 
-        return insert
+        return postgres_insert
     if dialect == "sqlite":
-        from sqlalchemy.dialects.sqlite import insert
+        from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
-        return insert
+        return sqlite_insert
     raise NotImplementedError(f"ON CONFLICT inserts are not implemented for {dialect}")
 
 

@@ -18,7 +18,9 @@ LIMITED = {"X-API-Key": "limit-key"}  # a user nothing else in this file uses
 RATE_LIMIT = 100  # API_RATE_LIMIT_PER_MINUTE in the cluster profile
 MIB = 1024 * 1024
 
-pytestmark = pytest.mark.skipif(os.getenv("RUN_MULTI_INSTANCE") != "1", reason="Set RUN_MULTI_INSTANCE=1 (see module docstring).")
+pytestmark = pytest.mark.skipif(
+    os.getenv("RUN_MULTI_INSTANCE") != "1", reason="Set RUN_MULTI_INSTANCE=1 (see module docstring)."
+)
 
 
 @pytest.fixture
@@ -52,7 +54,12 @@ def test_upload_lifecycle_across_instances(http) -> None:
         http,
         "POST",
         "/v1/uploads/init",
-        json={"file_name": "cluster.bin", "file_size": len(data), "chunk_size": 5 * MIB, "file_checksum_sha256": hashlib.sha256(data).hexdigest()},
+        json={
+            "file_name": "cluster.bin",
+            "file_size": len(data),
+            "chunk_size": 5 * MIB,
+            "file_checksum_sha256": hashlib.sha256(data).hexdigest(),
+        },
         headers=UPLOADER,
     )
     assert init.status_code == 201, init.text
@@ -60,7 +67,13 @@ def test_upload_lifecycle_across_instances(http) -> None:
 
     served_by = set()
     for index in range(0, len(data), 5 * MIB):
-        response = _request(http, "PUT", f"/v1/uploads/{upload_id}/chunks/{index // (5 * MIB)}", content=data[index : index + 5 * MIB], headers=UPLOADER)
+        response = _request(
+            http,
+            "PUT",
+            f"/v1/uploads/{upload_id}/chunks/{index // (5 * MIB)}",
+            content=data[index : index + 5 * MIB],
+            headers=UPLOADER,
+        )
         assert response.status_code == 202, response.text
         served_by.add(response.headers["X-DFS-Instance"])
     assert len(served_by) >= 2, f"all chunks went to one instance: {served_by}"
@@ -68,15 +81,20 @@ def test_upload_lifecycle_across_instances(http) -> None:
     complete = _request(http, "POST", f"/v1/uploads/{upload_id}/complete", headers=UPLOADER)
     assert complete.status_code == 202, complete.text  # verified by finalizer-cluster, a third process
     deadline = time.monotonic() + 60
-    while (status := _request(http, "GET", f"/v1/uploads/{upload_id}", headers=UPLOADER).json()["status"]) == "VERIFYING":
+    while (
+        status := _request(http, "GET", f"/v1/uploads/{upload_id}", headers=UPLOADER).json()["status"]
+    ) == "VERIFYING":
         assert time.monotonic() < deadline, "verification did not finish"
         time.sleep(1)
     assert status == "COMPLETED"
 
     download = _request(http, "GET", f"/v1/uploads/{upload_id}/download", headers=UPLOADER)
     assert hashlib.sha256(download.content).hexdigest() == hashlib.sha256(data).hexdigest()
-    ranged = _request(http, "GET", f"/v1/uploads/{upload_id}/download", headers={**UPLOADER, "Range": "bytes=5242870-5242890"})
-    assert ranged.status_code == 206 and ranged.content == data[5242870:5242891]
+    ranged = _request(
+        http, "GET", f"/v1/uploads/{upload_id}/download", headers={**UPLOADER, "Range": "bytes=5242870-5242890"}
+    )
+    assert ranged.status_code == 206
+    assert ranged.content == data[5242870:5242891]
 
 
 def test_rate_limit_is_shared_across_instances(http) -> None:
@@ -99,6 +117,8 @@ def test_rate_limit_is_shared_across_instances(http) -> None:
 
     allowed = [instance for status, instance in results if status == 404]
     throttled = [status for status, _ in results if status == 429]
-    assert len(allowed) == RATE_LIMIT, f"{len(allowed)} allowed; a per-instance limit would allow up to {2 * RATE_LIMIT}"
+    assert len(allowed) == RATE_LIMIT, (
+        f"{len(allowed)} allowed; a per-instance limit would allow up to {2 * RATE_LIMIT}"
+    )
     assert len(throttled) == 30
     assert len(set(allowed)) >= 2  # the shared budget was spent on both instances

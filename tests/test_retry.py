@@ -32,7 +32,9 @@ def _flaky(failures: int, exc_type=Transient):
 
 
 def _client_error(code: str, status: int = 400) -> ClientError:
-    return ClientError({"Error": {"Code": code, "Message": "m"}, "ResponseMetadata": {"HTTPStatusCode": status}}, "PutObject")
+    return ClientError(
+        {"Error": {"Code": code, "Message": "m"}, "ResponseMetadata": {"HTTPStatusCode": status}}, "PutObject"
+    )
 
 
 def test_retry_delays_bounded_and_jittered() -> None:
@@ -60,14 +62,16 @@ def test_retry_delays_never_exceed_their_bound_with_real_randomness() -> None:
     call_with_retry(fn, attempts=7, base_delay_s=0.1, max_delay_s=1.0, is_retryable=lambda e: True, sleep=sleeps.append)
     bounds = [min(1.0, 0.1 * 2**n) for n in range(6)]
     assert len(sleeps) == 6
-    assert all(0 <= delay <= bound for delay, bound in zip(sleeps, bounds))
+    assert all(0 <= delay <= bound for delay, bound in zip(sleeps, bounds, strict=True))
 
 
 def test_non_retryable_error_fails_fast() -> None:
     fn, calls = _flaky(1, exc_type=ValueError)
     sleeps: list[float] = []
-    with pytest.raises(ValueError):
-        call_with_retry(fn, attempts=4, base_delay_s=0.1, max_delay_s=1.0, is_retryable=lambda e: False, sleep=sleeps.append)
+    with pytest.raises(ValueError, match="failure 1"):
+        call_with_retry(
+            fn, attempts=4, base_delay_s=0.1, max_delay_s=1.0, is_retryable=lambda e: False, sleep=sleeps.append
+        )
     assert calls["n"] == 1
     assert sleeps == []
 
@@ -77,15 +81,20 @@ def test_retry_gives_up_after_attempts_and_reports_each_retry() -> None:
     retried: list[Exception] = []
     with pytest.raises(Transient, match="failure 3"):
         call_with_retry(
-            fn, attempts=3, base_delay_s=0.0, max_delay_s=0.0, is_retryable=lambda e: True,
-            sleep=lambda s: None, on_retry=retried.append,
+            fn,
+            attempts=3,
+            base_delay_s=0.0,
+            max_delay_s=0.0,
+            is_retryable=lambda e: True,
+            sleep=lambda s: None,
+            on_retry=retried.append,
         )
     assert calls["n"] == 3
     assert len(retried) == 2
 
 
 @pytest.mark.parametrize(
-    "exc, transient",
+    ("exc", "transient"),
     [
         (_client_error("SlowDown", 503), True),
         (_client_error("RequestTimeout", 400), True),
@@ -111,7 +120,9 @@ def test_is_transient_storage_error(exc: Exception, transient: bool) -> None:
 
 def test_s3_client_pool_sized_to_workers(monkeypatch) -> None:
     captured: list[dict] = []
-    monkeypatch.setitem(sys.modules, "boto3", types.SimpleNamespace(client=lambda service, **kw: captured.append(kw) or object()))
+    monkeypatch.setitem(
+        sys.modules, "boto3", types.SimpleNamespace(client=lambda service, **kw: captured.append(kw) or object())
+    )
     monkeypatch.setattr(settings, "worker_count", 16)
 
     S3ChunkStorage(bucket="b", region="us-east-1")

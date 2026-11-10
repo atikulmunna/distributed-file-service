@@ -26,7 +26,7 @@ def health() -> dict[str, str]:
 def _check(probe) -> str:
     try:
         result = probe()
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001  a failing dependency is reported by /ready, not raised
         return f"error: {type(exc).__name__}"
     return "error: ping failed" if result is False else "ok"
 

@@ -32,7 +32,9 @@ class _FakeS3Client:
         return {
             "Body": types.SimpleNamespace(
                 read=lambda: payload,
-                iter_chunks=lambda chunk_size: (payload[i : i + chunk_size] for i in range(0, len(payload), chunk_size)),
+                iter_chunks=lambda chunk_size: (
+                    payload[i : i + chunk_size] for i in range(0, len(payload), chunk_size)
+                ),
             )
         }
 
@@ -82,7 +84,7 @@ def test_part_checksum_sent(monkeypatch) -> None:
     storage.initialize_upload("u1")
     storage.write_chunk("u1", 0, b"abc", multipart_upload_id="mp-1", sha256_hex=hashlib.sha256(b"abc").hexdigest())
     storage.write_chunk("u2", 0, b"single")  # one-chunk upload: a plain object
-    calls = dict((name, kwargs) for name, kwargs in fake_client.calls)
+    calls = dict(fake_client.calls)
     assert calls["create_multipart_upload"]["ChecksumAlgorithm"] == "SHA256"
     assert calls["upload_part"]["ChecksumAlgorithm"] == "SHA256"
     assert calls["upload_part"]["ChecksumSHA256"] == _b64_sha256(b"abc")
@@ -96,7 +98,8 @@ def test_part_checksums_can_be_disabled(monkeypatch) -> None:
     storage.write_chunk("u1", 0, b"abc", multipart_upload_id="mp-1")
     storage.write_chunk("u2", 0, b"single")
     for _, kwargs in fake_client.calls:
-        assert "ChecksumAlgorithm" not in kwargs and "ChecksumSHA256" not in kwargs
+        assert "ChecksumAlgorithm" not in kwargs
+        assert "ChecksumSHA256" not in kwargs
 
 
 def test_sse_params_passed(monkeypatch) -> None:
@@ -104,7 +107,7 @@ def test_sse_params_passed(monkeypatch) -> None:
     storage.initialize_upload("u1")
     storage.write_chunk("u1", 0, b"abc", multipart_upload_id="mp-1")
     storage.write_chunk("u2", 0, b"single")
-    calls = dict((name, kwargs) for name, kwargs in fake_client.calls)
+    calls = dict(fake_client.calls)
     for name in ("create_multipart_upload", "put_object"):
         assert calls[name]["ServerSideEncryption"] == "aws:kms"
         assert calls[name]["SSEKMSKeyId"] == "key-123"
@@ -113,7 +116,8 @@ def test_sse_params_passed(monkeypatch) -> None:
     storage, fake_client = _fake_storage(monkeypatch, s3_sse="AES256", s3_sse_kms_key_id="")
     storage.write_chunk("u3", 0, b"single")
     put = fake_client.calls[-1][1]
-    assert put["ServerSideEncryption"] == "AES256" and "SSEKMSKeyId" not in put
+    assert put["ServerSideEncryption"] == "AES256"
+    assert "SSEKMSKeyId" not in put
 
 
 def test_iter_object_streams_in_blocks(monkeypatch) -> None:
@@ -160,5 +164,8 @@ def test_build_storage_s3_without_endpoint_uses_default_addressing(monkeypatch) 
 def test_iter_range_is_one_streaming_ranged_get(monkeypatch) -> None:
     storage, fake_client = _fake_storage(monkeypatch)
     blocks = list(storage.iter_range("uploads/u1/assembled", 1, 3, block_size=2))
-    assert fake_client.calls[-1] == ("get_object", {"Bucket": "bucket-1", "Key": "uploads/u1/assembled", "Range": "bytes=1-3"})
+    assert fake_client.calls[-1] == (
+        "get_object",
+        {"Bucket": "bucket-1", "Key": "uploads/u1/assembled", "Range": "bytes=1-3"},
+    )
     assert b"".join(blocks)  # streamed through iter_chunks

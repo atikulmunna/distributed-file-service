@@ -62,7 +62,9 @@ def process(job: FinalizeJob) -> str:
         db.commit()
     finalize_jobs_total.labels(outcome=outcome).inc()
     finalize_duration_seconds.observe(time.perf_counter() - started)
-    log_event({"event": "verification_finished", "upload_id": job.upload_id, "outcome": outcome, "attempt": job.attempt})
+    log_event(
+        {"event": "verification_finished", "upload_id": job.upload_id, "outcome": outcome, "attempt": job.attempt}
+    )
     return outcome
 
 
@@ -73,7 +75,7 @@ def handle(queue: JobQueue, reservation: Reservation, retry_delay_s: float | Non
     try:
         process(job)
         queue.ack(reservation)
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001  a failed job is released with backoff and retried
         attempt = job.attempt + 1
         log_event(
             {
@@ -108,7 +110,9 @@ def sweep_lost_jobs(queue: JobQueue) -> int:
     cutoff = utc_now() - timedelta(seconds=settings.job_lease_seconds)
     with SessionLocal() as db:
         stuck = list(
-            db.scalars(select(Upload.id).where(Upload.status == UploadStatus.verifying.value, Upload.updated_at < cutoff))
+            db.scalars(
+                select(Upload.id).where(Upload.status == UploadStatus.verifying.value, Upload.updated_at < cutoff)
+            )
         )
         for upload_id in stuck:
             transition(db, upload_id, {UploadStatus.verifying}, UploadStatus.verifying)
@@ -130,12 +134,14 @@ def _worker_loop(queue: JobQueue, stop: threading.Event, poll_timeout_s: float, 
             reservation = queue.reserve(timeout_s=poll_timeout_s)
             if reservation is not None:
                 handle(queue, reservation)
-        except Exception as exc:  # keep the worker alive; the queue redelivers anything unacked
+        except Exception as exc:  # noqa: BLE001  keep the worker alive; the queue redelivers anything unacked
             log_event({"event": "verification_worker_error", "error_class": type(exc).__name__, "detail": str(exc)})
             stop.wait(1)
 
 
-def start_workers(queue: JobQueue, concurrency: int, stop: threading.Event, poll_timeout_s: float) -> list[threading.Thread]:
+def start_workers(
+    queue: JobQueue, concurrency: int, stop: threading.Event, poll_timeout_s: float
+) -> list[threading.Thread]:
     threads = [
         threading.Thread(
             target=_worker_loop, args=(queue, stop, poll_timeout_s, index == 0), name=f"finalizer-{index}", daemon=True

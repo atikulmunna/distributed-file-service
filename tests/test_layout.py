@@ -32,7 +32,7 @@ def test_layout_rejects_out_of_range_indexes_and_offsets() -> None:
 
 
 def test_layout_rejects_invalid_dimensions() -> None:
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="file_size"):
         ChunkLayout(-1, 5)
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="chunk_size"):
         ChunkLayout(10, 0)

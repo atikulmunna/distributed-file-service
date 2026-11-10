@@ -32,7 +32,7 @@ from collections import Counter
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import httpx
@@ -161,7 +161,13 @@ def upload_one_file(
 ) -> dict:
     started = time.perf_counter()
     latencies_ms: list[float] = []
-    result: dict = {"file_name": file_name, "file_bytes": len(payload), "upload_id": None, "failed": False, "error": None}
+    result: dict = {
+        "file_name": file_name,
+        "file_bytes": len(payload),
+        "upload_id": None,
+        "failed": False,
+        "error": None,
+    }
     view = memoryview(payload)
     try:
         init = _call(
@@ -178,7 +184,10 @@ def upload_one_file(
         def put_chunk(index: int, offset: int) -> None:
             body = bytes(view[offset : offset + chunk_size])
             t0 = time.perf_counter()
-            _call(stats, lambda: client.put(f"{base_url}/v1/uploads/{upload_id}/chunks/{index}", content=body, headers=headers))
+            _call(
+                stats,
+                lambda: client.put(f"{base_url}/v1/uploads/{upload_id}/chunks/{index}", content=body, headers=headers),
+            )
             latencies_ms.append((time.perf_counter() - t0) * 1000)
 
         with ThreadPoolExecutor(max_workers=per_file_chunk_workers) as pool:
@@ -250,7 +259,9 @@ def _latency_summary(values: list[float]) -> dict:
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Load test for distributed-file-service.")
     parser.add_argument("--base-url", default="http://127.0.0.1:8000", help="API base URL")
-    parser.add_argument("--workload", choices=sorted(WORKLOADS), help="Fixed workload; overrides size and concurrency flags")
+    parser.add_argument(
+        "--workload", choices=sorted(WORKLOADS), help="Fixed workload; overrides size and concurrency flags"
+    )
     parser.add_argument("--label", default="", help="Run label, e.g. baseline or after-task4")
     parser.add_argument("--files", type=int, default=5, help="Number of files to upload")
     parser.add_argument("--file-size-bytes", type=int, default=5 * MIB, help="Per file size in bytes")
@@ -259,7 +270,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--concurrent-files", type=int, default=None, help="Files uploaded in parallel")
     parser.add_argument("--per-file-chunk-workers", type=int, default=None, help="Parallel chunk uploads per file")
     parser.add_argument("--download", action="store_true", help="Download every completed file and verify its SHA-256")
-    parser.add_argument("--output", default="", help="JSON summary path (default with --workload and --label: benchmarks/results/<date>_<workload>_<label>.json)")
+    parser.add_argument(
+        "--output",
+        default="",
+        help="JSON summary path (default with --workload and --label: benchmarks/results/<date>_<workload>_<label>.json)",
+    )
     parser.add_argument("--api-key", default=os.getenv("LOAD_TEST_API_KEY", "dev-key"), help="Sent as X-API-Key")
     return parser.parse_args(argv)
 
@@ -291,7 +306,7 @@ def main(argv: list[str] | None = None) -> int:
 
     meta = {
         "label": args.label,
-        "timestamp_utc": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "timestamp_utc": datetime.now(UTC).isoformat(timespec="seconds"),
         "git_sha": _git("rev-parse", "HEAD"),
         "git_dirty": _git("status", "--porcelain") not in ("", "unknown"),
         "platform": platform.platform(),
@@ -369,8 +384,10 @@ def main(argv: list[str] | None = None) -> int:
     print(json.dumps(summary, indent=2))
     output = args.output
     if not output and args.workload and args.label:
-        date = datetime.now(timezone.utc).strftime("%Y-%m-%d")
-        output = str(Path(__file__).resolve().parents[1] / "benchmarks" / "results" / f"{date}_{args.workload}_{args.label}.json")
+        date = datetime.now(UTC).strftime("%Y-%m-%d")
+        output = str(
+            Path(__file__).resolve().parents[1] / "benchmarks" / "results" / f"{date}_{args.workload}_{args.label}.json"
+        )
     if output:
         os.makedirs(os.path.dirname(output) or ".", exist_ok=True)
         with open(output, "w", encoding="utf-8") as handle:

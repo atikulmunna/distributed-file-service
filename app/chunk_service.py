@@ -98,7 +98,9 @@ def prepare_chunk(
                     select(Chunk).where(Chunk.upload_id == upload_id, Chunk.chunk_index == chunk_index)
                 )
                 if existing_chunk and existing_chunk.status == ChunkStatus.uploaded.value:
-                    return UploadChunkResponse(upload_id=upload_id, chunk_index=chunk_index, status=existing_chunk.status)
+                    return UploadChunkResponse(
+                        upload_id=upload_id, chunk_index=chunk_index, status=existing_chunk.status
+                    )
 
         return ChunkPlan(
             upload_id=upload_id,
@@ -125,7 +127,15 @@ def persist_chunk(plan: ChunkPlan, body: bytes) -> StorageWriteResult:
     return write_to_storage(plan.upload_id, plan.chunk_index, body, plan.multipart_upload_id, sha256_hex=plan.sha256)
 
 
-CHUNK_UPSERT_COLUMNS = ("size_bytes", "chunk_checksum_sha256", "s3_key", "s3_etag", "status", "retry_count", "updated_at")
+CHUNK_UPSERT_COLUMNS = (
+    "size_bytes",
+    "chunk_checksum_sha256",
+    "s3_key",
+    "s3_etag",
+    "status",
+    "retry_count",
+    "updated_at",
+)
 
 
 def upsert_chunk(db: Session, values: dict) -> None:

@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import threading
 import time
 import traceback
@@ -37,12 +38,10 @@ async def lifespan(_: FastAPI):
         while not stop_event.is_set():
             try:
                 await asyncio.to_thread(cleanup_once)  # DB and storage calls block; keep them off the loop
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001  logged; the cleanup loop must keep running
                 log_event({"event": "cleanup_error", "detail": str(exc), "error_class": "maintenance_error"})
-            try:
+            with contextlib.suppress(TimeoutError):  # the interval elapsed: run again
                 await asyncio.wait_for(stop_event.wait(), timeout=max(1, settings.cleanup_interval_seconds))
-            except asyncio.TimeoutError:
-                pass
 
     if settings.cleanup_enabled:
         tasks.append(asyncio.create_task(_periodic_cleanup_loop()))
@@ -172,7 +171,10 @@ async def http_exception_handler(request: Request, exc: HTTPException):
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     # Location, message and type only: the submitted value ("input") is not echoed back.
-    errors = [{"loc": list(e.get("loc", ())), "msg": str(e.get("msg", "")), "type": str(e.get("type", ""))} for e in exc.errors()]
+    errors = [
+        {"loc": list(e.get("loc", ())), "msg": str(e.get("msg", "")), "type": str(e.get("type", ""))}
+        for e in exc.errors()
+    ]
     log_event(
         {
             "event": "request_error",
@@ -186,7 +188,9 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
             "errors": errors,
         }
     )
-    return JSONResponse(status_code=422, content={**_error_body(request, 422, "request validation failed"), "errors": errors})
+    return JSONResponse(
+        status_code=422, content={**_error_body(request, 422, "request validation failed"), "errors": errors}
+    )
 
 
 @app.exception_handler(Exception)

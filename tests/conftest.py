@@ -46,18 +46,18 @@ if _TEST_DATABASE_URL.startswith("postgresql"):
 
     ensure_postgres_database(_TEST_DATABASE_URL)
 
-import uvicorn  # noqa: E402
-from fastapi.testclient import TestClient  # noqa: E402
-from sqlalchemy import create_engine, text  # noqa: E402
+import uvicorn
+from fastapi.testclient import TestClient
+from sqlalchemy import create_engine, text
 
-from app import models  # noqa: E402,F401  (registers tables on Base.metadata)
-from app.ratelimit import rate_limiter  # noqa: E402
-from app.config import settings  # noqa: E402
-from app.db import Base, SessionLocal, engine  # noqa: E402
-from app.jobs import job_queue  # noqa: E402
-from app.main import app  # noqa: E402
-from app.storage import storage  # noqa: E402
-from app.storage_policy import storage_breaker  # noqa: E402
+from app import models  # noqa: F401  (registers tables on Base.metadata)
+from app.config import settings
+from app.db import Base, SessionLocal, engine
+from app.jobs import job_queue
+from app.main import app
+from app.ratelimit import rate_limiter
+from app.storage import storage
+from app.storage_policy import storage_breaker
 
 
 def _empty_tables() -> None:
@@ -75,7 +75,7 @@ def _empty_tables() -> None:
 def _schema():
     Base.metadata.drop_all(bind=engine)
     Base.metadata.create_all(bind=engine)
-    yield
+    return
 
 
 @pytest.fixture(autouse=True)
@@ -86,7 +86,7 @@ def _clean_state():
     rate_limiter.reset()
     storage_breaker.reset()
     job_queue.clear()
-    yield
+    return
 
 
 @pytest.fixture

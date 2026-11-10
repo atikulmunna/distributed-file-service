@@ -58,7 +58,7 @@ def test_development_allows_dev_key(monkeypatch) -> None:
 
 
 @pytest.mark.parametrize(
-    "overrides, expected",
+    ("overrides", "expected"),
     [
         ({"api_key_mappings": "prod-key:ops-user,dev-key:dev-user"}, "dev-key"),
         ({"admin_user_ids": "ops-user,dev-user"}, "dev-user"),
@@ -153,7 +153,8 @@ def test_500_body_has_no_exception_text(monkeypatch, auth_headers, caplog) -> No
     assert set(body) == {"detail", "error_code", "request_id"}
     assert body["detail"] == "internal error"
     assert body["error_code"] == "internal_error"
-    assert "hunter2" not in response.text and "RuntimeError" not in response.text
+    assert "hunter2" not in response.text
+    assert "RuntimeError" not in response.text
     assert response.headers["X-Request-ID"] == body["request_id"]
     logged = [r.getMessage() for r in caplog.records if body["request_id"] in r.getMessage()]
     assert any("hunter2" in line and "RuntimeError" in line for line in logged), logged
@@ -164,7 +165,11 @@ def test_http_500_detail_is_not_exposed(client, monkeypatch) -> None:
     monkeypatch.setattr(settings, "jwt_secret", "")
     response = client.get("/v1/uploads/anything", headers={"Authorization": "Bearer abc"})
     assert response.status_code == 500
-    assert response.json() == {"detail": "internal error", "error_code": "internal_error", "request_id": response.headers["X-Request-ID"]}
+    assert response.json() == {
+        "detail": "internal error",
+        "error_code": "internal_error",
+        "request_id": response.headers["X-Request-ID"],
+    }
 
 
 def test_503_body_is_generic_and_keeps_retry_after(client, auth_headers, monkeypatch) -> None:
@@ -194,7 +199,8 @@ def test_validation_error_uses_the_error_envelope(client, auth_headers) -> None:
     assert body["error_code"] == "validation_error"
     assert body["detail"] == "request validation failed"
     assert body["request_id"] == response.headers["X-Request-ID"]
-    assert body["errors"] and body["errors"][0]["loc"] == ["body", "file_size"]
+    assert body["errors"]
+    assert body["errors"][0]["loc"] == ["body", "file_size"]
     assert set(body["errors"][0]) == {"loc", "msg", "type"}  # the submitted value is not echoed back
 
 

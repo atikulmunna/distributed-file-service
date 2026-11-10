@@ -20,7 +20,9 @@ def fast_backoff(monkeypatch):
 
 def _new_upload(client, headers, file_size: int = 10, chunk_size: int = 5) -> str:
     response = client.post(
-        "/v1/uploads/init", json={"file_name": "f.bin", "file_size": file_size, "chunk_size": chunk_size}, headers=headers
+        "/v1/uploads/init",
+        json={"file_name": "f.bin", "file_size": file_size, "chunk_size": chunk_size},
+        headers=headers,
     )
     assert response.status_code == 201, response.text
     return response.json()["upload_id"]
@@ -61,7 +63,10 @@ def test_storage_outage_returns_503_with_retry_after(client, auth_headers, monke
 def test_permanent_storage_error_returns_500_without_internal_detail(client, auth_headers, monkeypatch) -> None:
     upload_id = _new_upload(client, auth_headers)
     error = ClientError(
-        {"Error": {"Code": "AccessDenied", "Message": "no access to secret-bucket-name"}, "ResponseMetadata": {"HTTPStatusCode": 403}},
+        {
+            "Error": {"Code": "AccessDenied", "Message": "no access to secret-bucket-name"},
+            "ResponseMetadata": {"HTTPStatusCode": 403},
+        },
         "PutObject",
     )
     failing, calls = _counting(lambda: error)
@@ -111,7 +116,9 @@ def test_init_during_storage_outage_returns_503(client, auth_headers, monkeypatc
 def test_complete_during_storage_outage_returns_503_and_releases_the_claim(client, auth_headers, monkeypatch) -> None:
     upload_id = _new_upload(client, auth_headers)
     for index, body in enumerate((b"aaaaa", b"bbbbb")):
-        assert client.put(f"/v1/uploads/{upload_id}/chunks/{index}", content=body, headers=auth_headers).status_code == 202
+        assert (
+            client.put(f"/v1/uploads/{upload_id}/chunks/{index}", content=body, headers=auth_headers).status_code == 202
+        )
     with SessionLocal() as db:  # take the multipart completion path
         db.execute(update(Upload).where(Upload.id == upload_id).values(multipart_upload_id="mp-test"))
         db.execute(update(Chunk).where(Chunk.upload_id == upload_id).values(s3_etag='"etag"'))

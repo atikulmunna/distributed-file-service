@@ -20,6 +20,7 @@ import threading
 import time
 import uuid
 from dataclasses import asdict, dataclass
+from typing import Any, cast
 
 from app.config import settings
 
@@ -33,7 +34,7 @@ class FinalizeJob:
         return json.dumps(asdict(self), separators=(",", ":"), sort_keys=True)
 
     @classmethod
-    def from_json(cls, payload: str) -> "FinalizeJob":
+    def from_json(cls, payload: str) -> FinalizeJob:
         return cls(**json.loads(payload))
 
 
@@ -151,14 +152,21 @@ class RedisStreamJobQueue(JobQueue):
     def reserve(self, timeout_s: float) -> Reservation | None:
         self._ensure_group()
         # First take over an entry whose holder has been idle longer than the lease.
-        claimed = self._redis.xautoclaim(
-            self._stream, self.GROUP, self._consumer, min_idle_time=self._lease_ms, start_id="0-0", count=1
+        # cast: redis-py types its sync and asyncio clients together (results are "Awaitable | Any").
+        claimed = cast(
+            "list[Any]",
+            self._redis.xautoclaim(
+                self._stream, self.GROUP, self._consumer, min_idle_time=self._lease_ms, start_id="0-0", count=1
+            ),
         )
         for entry_id, fields in claimed[1]:
             if fields:  # deleted entries come back without fields
                 return Reservation(FinalizeJob.from_json(fields["job"]), entry_id)
-        response = self._redis.xreadgroup(
-            self.GROUP, self._consumer, {self._stream: ">"}, count=1, block=max(1, int(timeout_s * 1000))
+        response = cast(
+            "list[Any]",
+            self._redis.xreadgroup(
+                self.GROUP, self._consumer, {self._stream: ">"}, count=1, block=max(1, int(timeout_s * 1000))
+            ),
         )
         if not response:
             return None

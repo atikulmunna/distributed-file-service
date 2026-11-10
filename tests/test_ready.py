@@ -63,4 +63,5 @@ def test_log_lines_carry_the_instance_id(client, caplog) -> None:
     with caplog.at_level(logging.INFO, logger="dfs.request"):
         client.get("/health")
     events = [json.loads(r.message) for r in caplog.records if r.name == "dfs.request"]
-    assert events and all(event["instance_id"] == INSTANCE_ID for event in events)
+    assert events
+    assert all(event["instance_id"] == INSTANCE_ID for event in events)

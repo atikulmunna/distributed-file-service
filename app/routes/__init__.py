@@ -1,8 +1,10 @@
 """HTTP routers. Shared OpenAPI error responses live here."""
 
+from typing import Any
+
 from app.schemas import ErrorResponse, ValidationErrorResponse
 
-COMMON_ERROR_RESPONSES = {
+COMMON_ERROR_RESPONSES: dict[int | str, dict[str, Any]] = {
     401: {"model": ErrorResponse, "description": "Missing API key"},
     403: {"model": ErrorResponse, "description": "Invalid API key, or admin access required"},
     422: {"model": ValidationErrorResponse, "description": "Request validation failed"},

@@ -6,7 +6,7 @@ import json
 import logging
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import httpx
 import pytest
@@ -91,7 +91,7 @@ def test_complete_within_lease_returns_409(client, auth_headers) -> None:
     _upload_chunks(client, auth_headers, upload_id, b"aaaaabbbbb", 5)
     with SessionLocal() as db:  # another request is completing it right now
         db.execute(
-            update(Upload).where(Upload.id == upload_id).values(status="COMPLETING", updated_at=datetime.now(timezone.utc))
+            update(Upload).where(Upload.id == upload_id).values(status="COMPLETING", updated_at=datetime.now(UTC))
         )
         db.commit()
     response = client.post(f"/v1/uploads/{upload_id}/complete", headers=auth_headers)
@@ -117,9 +117,11 @@ def test_complete_retry_after_commit_crash_succeeds(client, auth_headers, monkey
     def crash(conn, cursor, parameters) -> None:
         raise RuntimeError("simulated crash before COMPLETED was committed")
 
-    with before_statement("UPDATE uploads", crash, match=lambda params: "COMPLETED" in str(params)) as hook:
-        with TestClient(app, raise_server_exceptions=False) as tolerant:
-            first = tolerant.post(f"/v1/uploads/{upload_id}/complete", headers=auth_headers)
+    with (
+        before_statement("UPDATE uploads", crash, match=lambda params: "COMPLETED" in str(params)) as hook,
+        TestClient(app, raise_server_exceptions=False) as tolerant,
+    ):
+        first = tolerant.post(f"/v1/uploads/{upload_id}/complete", headers=auth_headers)
     assert hook.fired
     assert first.status_code == 500
     assert _status(upload_id) == "COMPLETING"
@@ -301,7 +303,9 @@ def test_multipart_download_streams_the_assembled_object(client, auth_headers, m
     monkeypatch.setattr(storage, "read_chunk", lambda key: pytest.fail(f"read a per-chunk object {key}"))
 
     full = client.get(f"/v1/uploads/{upload_id}/download", headers=auth_headers)
-    assert full.status_code == 200 and full.content == b"aaaaabbbbb"
+    assert full.status_code == 200
+    assert full.content == b"aaaaabbbbb"
     partial = client.get(f"/v1/uploads/{upload_id}/download", headers={**auth_headers, "Range": "bytes=3-6"})
-    assert partial.status_code == 206 and partial.content == b"aabb"
+    assert partial.status_code == 206
+    assert partial.content == b"aabb"
     assert read_keys == [f"uploads/{upload_id}/assembled"] * 2
