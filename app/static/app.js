@@ -1,4 +1,4 @@
-// File Service UI. Plain JavaScript, no build step (D4).
+// File Service UI. Plain JavaScript, no build step.
 // Rules: the server is the source of truth (chunk colors, statuses and history come from the API);
 // every number says where it comes from; dynamic text is inserted with textContent or DOM nodes only.
 

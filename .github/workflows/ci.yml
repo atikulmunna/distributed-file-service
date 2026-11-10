@@ -75,7 +75,7 @@ jobs:
         run: docker image inspect dfs:ci --format '{{.Size}}' | awk '{ printf "%.1f MB\n", $1 / 1e6 }'
 
   e2e:
-    # Browser smoke test (D5): the UI against a real server in headless Chromium. Each test starts
+    # Browser smoke test: the UI against a real server in headless Chromium. Each test starts
     # its own server (SQLite, local storage) and uploads, resumes, retries and downloads through the page.
     runs-on: ubuntu-latest
     steps:

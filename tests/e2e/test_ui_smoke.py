@@ -1,4 +1,4 @@
-"""Browser smoke test (D5): the UI uploads through a real server in a real browser.
+"""Browser smoke test: the UI uploads through a real server in a real browser.
 
 Run with RUN_E2E=1 (needs `pip install -r requirements-e2e.txt` and a browser:
 `python -m playwright install chromium`, or E2E_BROWSER_CHANNEL=chrome for an installed Chrome).

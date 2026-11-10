@@ -1,4 +1,4 @@
-"""The browser UI: static files served by the API (D4: no build step), and the rules it must keep."""
+"""The browser UI: static files served by the API (no build step), and the rules it must keep."""
 
 import hashlib
 import re

@@ -1,4 +1,4 @@
-"""The browser UI: one static page (app/static) that talks to the JSON API. No build step (D4)."""
+"""The browser UI: one static page (app/static) that talks to the JSON API, with no build step."""
 
 from pathlib import Path
 
