@@ -1,15 +1,16 @@
-# Build stage: install the dependencies into a virtual environment. --only-binary makes the build
-# fail loudly if a dependency ever needs compiling, instead of silently requiring a compiler.
+# Build stage: install the locked dependencies into a virtual environment. --only-binary makes the
+# build fail loudly if a dependency ever needs compiling, instead of silently requiring a compiler.
 FROM python:3.12-slim AS builder
 
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_DEFAULT_TIMEOUT=60
 
 RUN python -m venv /opt/venv
-COPY requirements.txt ./
+COPY requirements.lock ./
+# Every package, transitive ones included, is pinned and checked against its hash (requirements.lock).
 # Downloads go to a BuildKit cache mount: reused by later builds, never part of an image layer.
 RUN --mount=type=cache,target=/root/.cache/pip \
-    /opt/venv/bin/pip install --only-binary=:all: -r requirements.txt
+    /opt/venv/bin/pip install --require-hashes --only-binary=:all: -r requirements.lock
 
 # Runtime stage: the virtual environment and the application only (no compiler, no tests), run as
 # an unprivileged user that cannot modify the code.
