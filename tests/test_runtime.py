@@ -55,6 +55,16 @@ def test_shutdown_drains_the_storage_pool(monkeypatch) -> None:
     assert calls == [settings.shutdown_drain_seconds]
 
 
+def test_framework_errors_use_the_error_envelope(client) -> None:
+    unknown = client.get("/no/such/route")
+    assert unknown.status_code == 404
+    assert unknown.json()["error_code"] == "not_found"
+    assert unknown.json()["request_id"] == unknown.headers["X-Request-ID"]
+    wrong_method = client.delete("/health")
+    assert wrong_method.status_code == 405
+    assert wrong_method.json()["error_code"] == "method_not_allowed"
+
+
 def test_unmatched_route_metric_label(client) -> None:
     probe = "/no/such/path/7b1e5c"
     assert client.get(probe).status_code == 404

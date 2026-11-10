@@ -50,7 +50,10 @@ import uvicorn
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, text
 
-from app import models  # noqa: F401  (registers tables on Base.metadata)
+from app import (
+    models,  # noqa: F401  (registers tables on Base.metadata)
+    rolling,
+)
 from app.config import settings
 from app.db import Base, SessionLocal, engine
 from app.jobs import job_queue
@@ -85,6 +88,8 @@ def _clean_state():
     STORAGE_ROOT.mkdir(parents=True, exist_ok=True)
     rate_limiter.reset()
     storage_breaker.reset()
+    for window in (rolling.chunk_writes, rolling.storage_write_ms, rolling.throttled):
+        window.clear()
     job_queue.clear()
     return
 

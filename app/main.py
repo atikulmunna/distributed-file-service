@@ -6,9 +6,10 @@ import traceback
 import uuid
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.config import settings, validate_production_settings
 from app.finalizer import start_workers
@@ -72,6 +73,16 @@ def _upload_id(request: Request) -> str | None:
     return request.path_params.get("upload_id")
 
 
+SIGNED_DOWNLOAD_PREFIX = "/v1/downloads/"
+
+
+def _loggable_path(request: Request) -> str:
+    """The request path for logs. A download link is a credential until it expires, so its token is
+    replaced by the route template."""
+    path = request.url.path
+    return "/v1/downloads/{token}" if path.startswith(SIGNED_DOWNLOAD_PREFIX) else path
+
+
 def _route_label(request: Request) -> str:
     route = request.scope.get("route")
     if route is not None and hasattr(route, "path"):
@@ -85,6 +96,7 @@ def _error_code_for_status(status_code: int) -> str:
         401: "missing_api_key",
         403: "forbidden",
         404: "not_found",
+        405: "method_not_allowed",
         408: "request_timeout",
         409: "conflict",
         411: "length_required",
@@ -139,7 +151,7 @@ async def request_context_and_logging(request: Request, call_next):
             "request_id": request_id,
             "upload_id": _upload_id(request),
             "method": request.method,
-            "path": request.url.path,
+            "path": _loggable_path(request),
             "status_code": response.status_code,
             "duration_ms": duration_ms,
         }
@@ -147,15 +159,16 @@ async def request_context_and_logging(request: Request, call_next):
     return response
 
 
-@app.exception_handler(HTTPException)
-async def http_exception_handler(request: Request, exc: HTTPException):
+# Starlette's class, so its own errors (an unknown route's 404, a wrong method's 405) get the envelope too.
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(request: Request, exc: StarletteHTTPException):
     log_event(
         {
             "event": "request_error",
             "request_id": request_id_of(request),
             "upload_id": _upload_id(request),
             "method": request.method,
-            "path": request.url.path,
+            "path": _loggable_path(request),
             "status_code": exc.status_code,
             "error_class": "client_error" if 400 <= exc.status_code < 500 else "server_error",
             "detail": str(exc.detail),
@@ -181,7 +194,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
             "request_id": request_id_of(request),
             "upload_id": _upload_id(request),
             "method": request.method,
-            "path": request.url.path,
+            "path": _loggable_path(request),
             "status_code": 422,
             "error_class": "client_error",
             "detail": "request validation failed",
@@ -201,7 +214,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
             "request_id": request_id_of(request),
             "upload_id": _upload_id(request),
             "method": request.method,
-            "path": request.url.path,
+            "path": _loggable_path(request),
             "status_code": 500,
             "error_class": "unhandled_exception",
             "exception_type": type(exc).__name__,

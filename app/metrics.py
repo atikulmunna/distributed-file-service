@@ -1,6 +1,8 @@
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
 from starlette.responses import Response
 
+from app import rolling
+
 chunks_uploaded_total = Counter("chunks_uploaded_total", "Total chunks uploaded")
 bytes_uploaded_total = Counter("bytes_uploaded_total", "Total bytes uploaded")
 chunk_upload_failures_total = Counter("chunk_upload_failures_total", "Total failed chunk uploads")
@@ -24,6 +26,12 @@ http_request_duration_seconds = Histogram(
     "HTTP request latency in seconds",
     ["method", "route", "status_code"],
 )
+
+
+def count_throttled() -> None:
+    """A request answered with 429: the Prometheus counter and the /v1/stats window."""
+    throttled_requests_total.inc()
+    rolling.throttled.record()
 
 
 def metrics_response() -> Response:

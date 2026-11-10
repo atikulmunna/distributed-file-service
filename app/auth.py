@@ -7,7 +7,7 @@ from fastapi import Depends, Header, HTTPException
 from jwt import InvalidTokenError
 
 from app.config import AUTH_MODES, parse_api_key_mappings, settings
-from app.metrics import throttled_requests_total
+from app.metrics import count_throttled
 from app.ratelimit import rate_limiter
 
 
@@ -76,6 +76,17 @@ def _resolve_from_api_key(x_api_key: str | None) -> str:
     return user_id
 
 
+def enforce_rate_limit(user_id: str) -> None:
+    """Keyed by user, not by credential: a new token, key or download link does not buy a new budget."""
+    if not rate_limiter.allow(user_id, settings.api_rate_limit_per_minute, 60):
+        count_throttled()
+        raise HTTPException(
+            status_code=429,
+            detail="principal rate limit exceeded",
+            headers={"Retry-After": "60", "X-RateLimit-Reason": "api_key_rate_limit"},
+        )
+
+
 def require_api_user(
     x_api_key: str | None = Header(default=None, alias="X-API-Key"),
     authorization: str | None = Header(default=None, alias="Authorization"),
@@ -89,15 +100,7 @@ def require_api_user(
     else:
         user_id, source = _resolve_from_api_key(x_api_key), "api_key"
 
-    # Keyed by user, not by credential: a new token or key does not buy a new budget.
-    if not rate_limiter.allow(user_id, settings.api_rate_limit_per_minute, 60):
-        throttled_requests_total.inc()
-        raise HTTPException(
-            status_code=429,
-            detail="principal rate limit exceeded",
-            headers={"Retry-After": "60", "X-RateLimit-Reason": "api_key_rate_limit"},
-        )
-
+    enforce_rate_limit(user_id)
     admin_ids = {item.strip() for item in settings.admin_user_ids.split(",") if item.strip()}
     return AuthUser(user_id=user_id, api_key=source, is_admin=user_id in admin_ids)
 

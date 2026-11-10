@@ -17,7 +17,12 @@ from app.main import app
 from app.storage import storage
 
 OTHER_USER = {"X-API-Key": "other-key"}
-SAFE_PRODUCTION = {"api_key_mappings": "prod-key:ops-user", "admin_user_ids": "ops-user", "auth_mode": "api_key"}
+SAFE_PRODUCTION = {
+    "api_key_mappings": "prod-key:ops-user",
+    "admin_user_ids": "ops-user",
+    "auth_mode": "api_key",
+    "download_url_secret": "s" * 32,
+}
 
 
 def _production(monkeypatch, **overrides) -> None:

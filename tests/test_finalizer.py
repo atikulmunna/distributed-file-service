@@ -91,7 +91,13 @@ def test_status_endpoint(client, auth_headers) -> None:
     upload_id = _verifying(client, auth_headers, BAD)
     response = client.get(f"/v1/uploads/{upload_id}", headers=auth_headers)
     assert response.status_code == 200
-    assert response.json() == {"upload_id": upload_id, "status": "VERIFYING", "failure_reason": None}
+    body = response.json()
+    # the fields a poller relies on (the detail view has more)
+    assert {key: body[key] for key in ("upload_id", "status", "failure_reason")} == {
+        "upload_id": upload_id,
+        "status": "VERIFYING",
+        "failure_reason": None,
+    }
     process(FinalizeJob(upload_id))
     body = client.get(f"/v1/uploads/{upload_id}", headers=auth_headers).json()
     assert body["status"] == "FAILED"

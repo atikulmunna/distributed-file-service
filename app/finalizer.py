@@ -25,7 +25,7 @@ from app.jobs import FinalizeJob, JobQueue, MemoryJobQueue, Reservation, job_que
 from app.layout import ChunkLayout
 from app.logging_utils import log_event
 from app.metrics import finalize_duration_seconds, finalize_jobs_total
-from app.models import Chunk, Upload, UploadStatus, utc_now
+from app.models import CHECKSUM_MISMATCH, Chunk, Upload, UploadStatus, utc_now
 from app.upload_state import transition
 
 
@@ -56,7 +56,7 @@ def process(job: FinalizeJob) -> str:
             transition(db, job.upload_id, {UploadStatus.verifying}, UploadStatus.completed)
             outcome = "completed"
         else:
-            reason = f"file checksum mismatch: expected {expected}, got {actual}"
+            reason = f"{CHECKSUM_MISMATCH}: expected {expected}, got {actual}"
             transition(db, job.upload_id, {UploadStatus.verifying}, UploadStatus.failed, failure_reason=reason)
             outcome = "failed"
         db.commit()

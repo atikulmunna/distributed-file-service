@@ -15,6 +15,7 @@ from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app import rolling
 from app.auth import AuthUser
 from app.db import SessionLocal, dialect_insert
 from app.layout import ChunkLayout
@@ -118,7 +119,9 @@ def write_to_storage(
     result = storage.write_chunk(
         upload_id, chunk_index, data, multipart_upload_id=multipart_upload_id, sha256_hex=sha256_hex
     )
-    s3_put_latency_seconds.observe(time.perf_counter() - start)
+    elapsed = time.perf_counter() - start
+    s3_put_latency_seconds.observe(elapsed)
+    rolling.storage_write_ms.record(elapsed * 1000)
     return result
 
 
@@ -213,3 +216,4 @@ def record_chunk(plan: ChunkPlan, result: StorageWriteResult, retries: int, idem
     db_update_latency_seconds.observe(time.perf_counter() - db_t0)
     chunks_uploaded_total.inc()
     bytes_uploaded_total.inc(plan.size)
+    rolling.chunk_writes.record(plan.size)  # after the commit: counts only chunks that are durable

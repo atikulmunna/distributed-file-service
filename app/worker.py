@@ -4,7 +4,7 @@ from threading import Condition, Lock
 from fastapi import HTTPException
 
 from app.config import settings
-from app.metrics import inflight_chunks, task_queue_depth, throttled_requests_total, worker_busy_count, worker_count
+from app.metrics import count_throttled, inflight_chunks, task_queue_depth, worker_busy_count, worker_count
 
 THROTTLE_HEADERS_BASE = {"Retry-After": "1"}
 
@@ -27,14 +27,14 @@ class BackpressureExecutor:
     def _try_admit(self) -> None:
         with self._lock:
             if self._queued >= self.queue_maxsize:
-                throttled_requests_total.inc()
+                count_throttled()
                 raise HTTPException(
                     status_code=429,
                     detail="task queue is full",
                     headers={**THROTTLE_HEADERS_BASE, "X-RateLimit-Reason": "queue_full"},
                 )
             if self._inflight >= self.global_inflight_limit:
-                throttled_requests_total.inc()
+                count_throttled()
                 raise HTTPException(
                     status_code=429,
                     detail="global inflight chunk limit reached",
@@ -58,6 +58,16 @@ class BackpressureExecutor:
             worker_busy_count.set(min(self._inflight, self.workers))
             if self._queued == 0 and self._inflight == 0:
                 self._idle.notify_all()
+
+    @property
+    def queued(self) -> int:
+        with self._lock:
+            return self._queued
+
+    @property
+    def inflight(self) -> int:
+        with self._lock:
+            return self._inflight
 
     def drain(self, timeout_s: float) -> int:
         """Wait up to timeout_s for queued and running storage work to finish; return how many tasks

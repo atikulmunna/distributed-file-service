@@ -97,6 +97,26 @@ def test_upload_lifecycle_across_instances(http) -> None:
     assert ranged.content == data[5242870:5242891]
 
 
+def test_download_link_works_on_every_instance(http) -> None:
+    data = os.urandom(1000)
+    init = _request(
+        http, "POST", "/v1/uploads/init", json={"file_name": "link.bin", "file_size": len(data)}, headers=UPLOADER
+    )
+    upload_id = init.json()["upload_id"]
+    assert _request(http, "PUT", f"/v1/uploads/{upload_id}/chunks/0", content=data, headers=UPLOADER).status_code == 202
+    assert _request(http, "POST", f"/v1/uploads/{upload_id}/complete", headers=UPLOADER).json()["status"] == "COMPLETED"
+
+    link = _request(http, "POST", f"/v1/uploads/{upload_id}/download-url", headers=UPLOADER).json()["url"]
+    path = link.split("://", 1)[1].split("/", 1)[1]
+    served_by = set()
+    for _ in range(6):
+        response = http.get(f"/{path}")  # no API key; nginx spreads these over both instances
+        assert response.status_code == 200, response.text
+        assert response.content == data
+        served_by.add(response.headers["X-DFS-Instance"])
+    assert len(served_by) >= 2, f"one instance served every download: {served_by}"
+
+
 def test_rate_limit_is_shared_across_instances(http) -> None:
     # The window is per minute; start with at least 15 s left so all requests share one window.
     while 60 - time.time() % 60 < 15:

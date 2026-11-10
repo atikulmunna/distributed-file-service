@@ -45,4 +45,5 @@ HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=3 \
 # Migrations are a separate step (the compose "migrate" services), so replicas never race to run them.
 # On SIGTERM uvicorn stops accepting connections and gives open requests 30 s to finish; the app
 # then drains storage writes (SHUTDOWN_DRAIN_SECONDS). Container stop grace periods must cover both.
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--timeout-graceful-shutdown", "30"]
+# --no-access-log: the app logs every request as JSON (request_completed) with download links redacted.
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--timeout-graceful-shutdown", "30", "--no-access-log"]

@@ -1,19 +1,23 @@
-"""Upload lifecycle endpoints: init, chunk upload, complete, missing chunks, download."""
+"""Upload endpoints: init, chunk upload, complete, abort, the read views, download and download links."""
 
 import asyncio
+import base64
+import binascii
 import hashlib
 import json
 import uuid
+from datetime import datetime
 from functools import partial
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
-from sqlalchemy import select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 from starlette.requests import ClientDisconnect
 
-from app.auth import AuthUser, require_api_user
+from app import signed_urls
+from app.auth import AuthUser, enforce_rate_limit, require_api_user
 from app.chunk_service import (
     admit_chunk,
     persist_chunk,
@@ -22,7 +26,7 @@ from app.chunk_service import (
 )
 from app.config import settings
 from app.db import SessionLocal, get_db
-from app.download import content_disposition, iter_pieces, prepare_download
+from app.download import DownloadPlan, content_disposition, ensure_downloadable, iter_pieces, prepare_download
 from app.layout import ChunkLayout
 from app.limits import PerUploadInflightLimiter
 from app.logging_utils import audit_event, request_id_of
@@ -31,6 +35,7 @@ from app.metrics import (
     retries_total,
 )
 from app.models import (
+    CHECKSUM_MISMATCH,
     Chunk,
     ChunkStatus,
     InitRequestIdempotency,
@@ -39,13 +44,20 @@ from app.models import (
 )
 from app.routes import COMMON_ERROR_RESPONSES
 from app.schemas import (
+    ChunkInfo,
+    ChunkListResponse,
     CompleteUploadResponse,
+    DownloadUrlResponse,
     ErrorResponse,
     InitUploadRequest,
     InitUploadResponse,
+    LimitsResponse,
     MissingChunksResponse,
     UploadChunkResponse,
+    UploadDetail,
+    UploadListResponse,
     UploadStatusResponse,
+    UploadSummary,
 )
 from app.storage import storage
 from app.storage_policy import with_storage_retries
@@ -368,15 +380,158 @@ def complete_upload(
 
 
 @router.get(
+    "/v1/limits",
+    response_model=LimitsResponse,
+    responses={**COMMON_ERROR_RESPONSES},
+)
+def limits(user: AuthUser = Depends(require_api_user)) -> LimitsResponse:
+    """The input bounds init enforces, so a client can choose a valid chunk size up front."""
+    requires_min_part = settings.storage_backend.lower() in ("s3", "r2")
+    return LimitsResponse(
+        max_file_size_bytes=settings.max_file_size_bytes,
+        min_chunk_size_bytes=settings.min_chunk_size_bytes,
+        max_chunk_size_bytes=settings.max_chunk_size_bytes,
+        default_chunk_size_bytes=settings.chunk_size_bytes,
+        max_total_chunks=settings.max_total_chunks,
+        max_inflight_chunks_per_upload=settings.max_inflight_chunks_per_upload,
+        storage_backend_requires_min_part=requires_min_part,
+        min_part_size_bytes=MIN_MULTIPART_PART_SIZE if requires_min_part else None,
+    )
+
+
+def _encode_cursor(created_at: datetime, upload_id: str) -> str:
+    raw = json.dumps([created_at.isoformat(), upload_id], separators=(",", ":")).encode()
+    return base64.urlsafe_b64encode(raw).rstrip(b"=").decode("ascii")
+
+
+def _decode_cursor(cursor: str) -> tuple[datetime, str]:
+    try:
+        created_at, upload_id = json.loads(base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)))
+        return datetime.fromisoformat(created_at), str(upload_id)
+    except (binascii.Error, ValueError, TypeError) as exc:
+        raise HTTPException(status_code=400, detail="invalid cursor") from exc
+
+
+@router.get(
+    "/v1/uploads",
+    response_model=UploadListResponse,
+    responses={**COMMON_ERROR_RESPONSES, 400: {"model": ErrorResponse, "description": "Invalid cursor"}},
+)
+def list_uploads(
+    status: UploadStatus | None = Query(default=None, description="Only uploads in this status"),
+    limit: int = Query(default=50, ge=1, le=200),
+    cursor: str | None = Query(default=None, description="next_cursor from the previous page"),
+    user: AuthUser = Depends(require_api_user),
+) -> UploadListResponse:
+    """The caller's uploads, newest first. Keyset pagination: pages stay consistent while uploads are added."""
+    query = select(Upload).where(Upload.owner_id == user.user_id)
+    if status is not None:
+        query = query.where(Upload.status == status.value)
+    if cursor:
+        after_created, after_id = _decode_cursor(cursor)
+        query = query.where(
+            or_(Upload.created_at < after_created, and_(Upload.created_at == after_created, Upload.id < after_id))
+        )
+    query = query.order_by(Upload.created_at.desc(), Upload.id.desc()).limit(limit + 1)
+    with SessionLocal() as db:
+        rows = list(db.scalars(query))
+        page = rows[:limit]
+        counts = db.execute(
+            select(Chunk.upload_id, func.count())
+            .where(Chunk.upload_id.in_([row.id for row in page]), Chunk.status == ChunkStatus.uploaded.value)
+            .group_by(Chunk.upload_id)
+        ).all()
+        uploaded = {str(upload_id): int(count) for upload_id, count in counts}
+        items = [
+            UploadSummary(
+                upload_id=row.id,
+                file_name=row.file_name,
+                file_size=row.file_size,
+                total_chunks=row.total_chunks,
+                uploaded_chunks=uploaded.get(row.id, 0),
+                status=row.status,
+                created_at=row.created_at,
+                last_activity_at=row.last_activity_at,
+            )
+            for row in page
+        ]
+        next_cursor = _encode_cursor(page[-1].created_at, page[-1].id) if len(rows) > limit else None
+    return UploadListResponse(items=items, next_cursor=next_cursor)
+
+
+def _checksum_verified(upload: Upload) -> bool | None:
+    if not upload.file_checksum_sha256:
+        return None  # nothing to verify
+    if upload.status == UploadStatus.completed.value:
+        return True  # with a declared checksum, COMPLETED is reached only through a matching verification
+    if upload.status == UploadStatus.failed.value and (upload.failure_reason or "").startswith(CHECKSUM_MISMATCH):
+        return False
+    return None  # not verified yet
+
+
+@router.get(
     "/v1/uploads/{upload_id}",
-    response_model=UploadStatusResponse,
+    response_model=UploadDetail,
     responses={**COMMON_ERROR_RESPONSES, 404: {"model": ErrorResponse, "description": "Upload not found"}},
 )
-def upload_status(upload_id: str, user: AuthUser = Depends(require_api_user)) -> UploadStatusResponse:
-    """Current status of an upload. Poll it after a 202 VERIFYING from complete."""
+def upload_detail(upload_id: str, user: AuthUser = Depends(require_api_user)) -> UploadDetail:
+    """Everything about one upload. Poll it after a 202 VERIFYING from complete."""
     with SessionLocal() as db:
         upload = get_owned_upload(db, upload_id, user)
-        return UploadStatusResponse(upload_id=upload.id, status=upload.status, failure_reason=upload.failure_reason)
+        uploaded_chunks, uploaded_bytes = db.execute(
+            select(func.count(Chunk.id), func.coalesce(func.sum(Chunk.size_bytes), 0)).where(
+                Chunk.upload_id == upload_id, Chunk.status == ChunkStatus.uploaded.value
+            )
+        ).one()
+        # Built inside the session; it closes before the response is validated and sent.
+        return UploadDetail(
+            upload_id=upload.id,
+            file_name=upload.file_name,
+            file_size=upload.file_size,
+            chunk_size=upload.chunk_size,
+            total_chunks=upload.total_chunks,
+            status=upload.status,
+            uploaded_chunks=uploaded_chunks,
+            uploaded_bytes=uploaded_bytes,
+            file_checksum_sha256=upload.file_checksum_sha256,
+            checksum_verified=_checksum_verified(upload),
+            failure_reason=upload.failure_reason,
+            created_at=upload.created_at,
+            updated_at=upload.updated_at,
+            last_activity_at=upload.last_activity_at,
+        )
+
+
+@router.get(
+    "/v1/uploads/{upload_id}/chunks",
+    response_model=ChunkListResponse,
+    responses={**COMMON_ERROR_RESPONSES, 404: {"model": ErrorResponse, "description": "Upload not found"}},
+)
+def list_chunks(
+    upload_id: str,
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=500, ge=1, le=1000),
+    user: AuthUser = Depends(require_api_user),
+) -> ChunkListResponse:
+    """Recorded chunks in index order. Indexes missing from the list have not been received."""
+    with SessionLocal() as db:
+        get_owned_upload(db, upload_id, user)
+        total = db.scalar(select(func.count()).select_from(Chunk).where(Chunk.upload_id == upload_id)) or 0
+        rows = db.scalars(
+            select(Chunk).where(Chunk.upload_id == upload_id).order_by(Chunk.chunk_index).offset(offset).limit(limit)
+        )
+        items = [
+            ChunkInfo(
+                index=row.chunk_index,
+                size_bytes=row.size_bytes,
+                sha256=row.chunk_checksum_sha256,
+                status=row.status,
+                retry_count=row.retry_count,
+                updated_at=row.updated_at,
+            )
+            for row in rows
+        ]
+    return ChunkListResponse(items=items, total=total)
 
 
 @router.delete(
@@ -448,10 +603,15 @@ def download(
 ) -> Response:
     # Everything needed is read in one short session; no DB connection is held while streaming.
     plan = prepare_download(upload_id, user, range)
+    return _stream_download(request, plan, user, via="api", range_requested=bool(range))
+
+
+def _stream_download(request: Request, plan: DownloadPlan, user: AuthUser, via: str, range_requested: bool) -> Response:
     headers = {
         "Accept-Ranges": "bytes",
         "Content-Disposition": content_disposition(plan.file_name),
         "Content-Length": str(plan.length),
+        "Cache-Control": "private, no-store",  # user data: never kept by a shared cache
     }
     status_code = 200
     if plan.byte_range:
@@ -461,11 +621,12 @@ def download(
         {
             "event": "audit",
             "action": "download",
+            "via": via,
             "request_id": request_id_of(request),
-            "upload_id": upload_id,
+            "upload_id": plan.upload_id,
             "user_id": user.user_id,
             "status": UploadStatus.completed.value,
-            "range_requested": bool(range),
+            "range_requested": range_requested,
         }
     )
     return StreamingResponse(
@@ -474,3 +635,57 @@ def download(
         media_type="application/octet-stream",
         headers=headers,
     )
+
+
+@router.post(
+    "/v1/uploads/{upload_id}/download-url",
+    response_model=DownloadUrlResponse,
+    responses={
+        **COMMON_ERROR_RESPONSES,
+        404: {"model": ErrorResponse, "description": "Upload not found"},
+        409: {"model": ErrorResponse, "description": "Upload not completed"},
+    },
+)
+def create_download_url(
+    request: Request, upload_id: str, user: AuthUser = Depends(require_api_user)
+) -> DownloadUrlResponse:
+    """A link that downloads this upload without an API key until it expires (download_url_ttl_seconds)."""
+    with SessionLocal() as db:
+        ensure_downloadable(get_owned_upload(db, upload_id, user))
+    token, expires = signed_urls.issue(upload_id, user.user_id)
+    audit_event(
+        {
+            "event": "audit",
+            "action": "download_url_issued",
+            "request_id": request_id_of(request),
+            "upload_id": upload_id,
+            "user_id": user.user_id,
+            "expires": expires,
+        }
+    )
+    return DownloadUrlResponse(
+        url=str(request.url_for("signed_download", token=token)), expires_at=signed_urls.expiry_datetime(expires)
+    )
+
+
+@router.get(
+    "/v1/downloads/{token}",
+    name="signed_download",
+    responses={
+        403: {"model": ErrorResponse, "description": "Invalid or expired download link"},
+        404: {"model": ErrorResponse, "description": "Upload not found"},
+        409: {"model": ErrorResponse, "description": "Upload not completed"},
+        416: {"model": ErrorResponse, "description": "Invalid range request"},
+        429: {"model": ErrorResponse, "description": "The link owner's rate limit is exhausted"},
+    },
+)
+def signed_download(request: Request, token: str, range: str | None = Header(default=None)) -> Response:
+    """Download by signed link (from POST /v1/uploads/{upload_id}/download-url); supports Range."""
+    try:
+        grant = signed_urls.verify(token)
+    except signed_urls.InvalidDownloadLink:
+        raise HTTPException(status_code=403, detail="invalid or expired download link") from None
+    enforce_rate_limit(grant.owner_id)  # downloads by link spend the owner's budget
+    owner = AuthUser(user_id=grant.owner_id, api_key="download_link")
+    plan = prepare_download(grant.upload_id, owner, range)
+    return _stream_download(request, plan, owner, via="download_link", range_requested=bool(range))

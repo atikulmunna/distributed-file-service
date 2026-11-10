@@ -176,6 +176,7 @@ services:
       RATE_LIMIT_BACKEND: redis
       API_RATE_LIMIT_PER_MINUTE: "100"
       API_KEY_MAPPINGS: dev-key:dev-user,limit-key:limit-user
+      DOWNLOAD_URL_SECRET: cluster-test-download-link-secret-0123456789  # shared by both replicas
       # The replicas publish no ports, so only nginx reaches them: trust its X-Forwarded-* headers.
       FORWARDED_ALLOW_IPS: "*"
     depends_on:

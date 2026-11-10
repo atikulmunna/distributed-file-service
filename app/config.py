@@ -42,6 +42,10 @@ class Settings(BaseSettings):
     jwt_issuer: str = ""
     # When set, /metrics requires "Authorization: Bearer <metrics_token>".
     metrics_token: str = ""
+    # Signs download links (POST /v1/uploads/{id}/download-url). Every instance must share it. When
+    # empty in development, each process makes a random one (links then work only on that process).
+    download_url_secret: str = ""
+    download_url_ttl_seconds: int = 300
     tracing_enabled: bool = False
     tracing_service_name: str = "distributed-file-service"
     otlp_endpoint: str = "localhost:4317"
@@ -117,6 +121,7 @@ AUTH_MODES = ("api_key", "jwt", "hybrid")
 DEV_API_KEY = "dev-key"
 DEV_ADMIN_USER = "dev-user"
 MIN_JWT_SECRET_BYTES = 32
+MIN_DOWNLOAD_URL_SECRET_BYTES = 32
 
 
 def parse_api_key_mappings(raw: str) -> dict[str, str]:
@@ -141,6 +146,8 @@ def validate_production_settings(s: Settings) -> list[str]:
         problems.append(f"ADMIN_USER_IDS contains the development admin {DEV_ADMIN_USER}")
     if mode in ("jwt", "hybrid") and len(s.jwt_secret.encode("utf-8")) < MIN_JWT_SECRET_BYTES:
         problems.append(f"JWT_SECRET must be at least {MIN_JWT_SECRET_BYTES} bytes in {mode} mode")
+    if len(s.download_url_secret.encode("utf-8")) < MIN_DOWNLOAD_URL_SECRET_BYTES:
+        problems.append(f"DOWNLOAD_URL_SECRET must be at least {MIN_DOWNLOAD_URL_SECRET_BYTES} bytes")
     return problems
 
 

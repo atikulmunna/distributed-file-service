@@ -7,6 +7,9 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
 
+# Prefix of failure_reason when whole-file verification finds a different checksum.
+CHECKSUM_MISMATCH = "file checksum mismatch"
+
 
 class UploadStatus(str, enum.Enum):
     initiated = "INITIATED"
@@ -35,7 +38,10 @@ def utc_now() -> datetime:
 
 class Upload(Base):
     __tablename__ = "uploads"
-    __table_args__ = (Index("ix_uploads_status_last_activity", "status", "last_activity_at"),)
+    __table_args__ = (
+        Index("ix_uploads_status_last_activity", "status", "last_activity_at"),
+        Index("ix_uploads_owner_created", "owner_id", "created_at", "id"),  # GET /v1/uploads, newest first
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     owner_id: Mapped[str] = mapped_column(String(128), nullable=False, default="legacy")

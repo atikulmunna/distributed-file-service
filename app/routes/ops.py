@@ -1,9 +1,12 @@
-"""Operational endpoints: health, version, metrics, admin maintenance."""
+"""Operational endpoints: health, readiness, version, metrics, stats, admin maintenance."""
+
+import time
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response
 from sqlalchemy import text
 
-from app.auth import AuthUser, require_admin_user, secret_matches
+from app import rolling
+from app.auth import AuthUser, require_admin_user, require_api_user, secret_matches
 from app.config import settings
 from app.db import engine
 from app.jobs import job_queue
@@ -11,11 +14,14 @@ from app.logging_utils import INSTANCE_ID
 from app.maintenance import cleanup_once
 from app.metrics import metrics_response
 from app.routes import COMMON_ERROR_RESPONSES
-from app.schemas import ErrorResponse, ValidationErrorResponse
+from app.schemas import ErrorResponse, ServiceStats, ValidationErrorResponse
 from app.storage import storage
 from app.storage_policy import storage_breaker
+from app.worker import executor
 
 router = APIRouter()
+
+STARTED_AT = time.monotonic()
 
 
 @router.get("/health")
@@ -78,6 +84,31 @@ def require_metrics_token(authorization: str | None = Header(default=None, alias
 )
 def metrics() -> Response:
     return metrics_response()
+
+
+def _ms(value: float | None) -> float | None:
+    return None if value is None else round(value, 2)
+
+
+@router.get("/v1/stats", response_model=ServiceStats, responses={**COMMON_ERROR_RESPONSES})
+def stats(user: AuthUser = Depends(require_api_user)) -> ServiceStats:
+    """This instance right now, and over the last window_s seconds. Other instances report their own."""
+    return ServiceStats(
+        instance_id=INSTANCE_ID,
+        app_version=settings.app_version,
+        uptime_s=round(time.monotonic() - STARTED_AT, 3),
+        inflight_chunks=executor.inflight,
+        inflight_limit=executor.global_inflight_limit,
+        queued_chunks=executor.queued,
+        queue_limit=executor.queue_maxsize,
+        worker_threads=executor.workers,
+        throttled_last_5m=rolling.throttled.count(),
+        chunks_last_5m=rolling.chunk_writes.count(),
+        bytes_last_5m=int(rolling.chunk_writes.total()),
+        storage_write_ms_p50=_ms(rolling.storage_write_ms.percentile(50)),
+        storage_write_ms_p95=_ms(rolling.storage_write_ms.percentile(95)),
+        window_s=rolling.STATS_WINDOW_S,
+    )
 
 
 @router.post(
