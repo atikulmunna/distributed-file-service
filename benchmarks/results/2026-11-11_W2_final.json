@@ -1,0 +1,62 @@
+{
+  "description": "W2, final code, 3 consecutive runs on the bench stack; medians per metric.",
+  "where": {
+    "host": "Windows 11 (10.0.26300), 32 logical CPUs, 31 GiB RAM",
+    "docker": "Docker Desktop, engine 29.9.2; its Linux VM has 4 CPUs and 7.8 GB",
+    "server": "one app container (one uvicorn process) from commit 9ecad34, Postgres 16, Versity S3 gateway v1.10.0 (posix backend on a Docker volume), all in that VM",
+    "client": "scripts/load_test.py on the Windows host (Python 3.12.13, httpx 0.28.1) through Docker's port forwarding to localhost:8001",
+    "config": "defaults: 16 storage workers, DB pool 10 + 10, 8 chunks in flight per upload, global in-flight 128, queue 512, download_prefetch 1 (the default when these runs were made)"
+  },
+  "command": "python scripts/load_test.py --base-url http://localhost:8001 --workload W2 --label final-rN",
+  "runs": [
+    {
+      "uploads_ok": 100,
+      "uploads": 100,
+      "upload_mib_per_s": 76.566,
+      "chunk_p50_ms": 7543.241,
+      "chunk_p95_ms": 14411.225,
+      "chunk_p99_ms": 15133.102,
+      "chunks": 400,
+      "download_mib_per_s": null,
+      "downloads_verified": null,
+      "retries": 0,
+      "retry_rate": 0.0,
+      "errors": {}
+    },
+    {
+      "uploads_ok": 100,
+      "uploads": 100,
+      "upload_mib_per_s": 52.753,
+      "chunk_p50_ms": 3775.554,
+      "chunk_p95_ms": 24251.762,
+      "chunk_p99_ms": 27598.586,
+      "chunks": 400,
+      "download_mib_per_s": null,
+      "downloads_verified": null,
+      "retries": 0,
+      "retry_rate": 0.0,
+      "errors": {}
+    },
+    {
+      "uploads_ok": 100,
+      "uploads": 100,
+      "upload_mib_per_s": 79.671,
+      "chunk_p50_ms": 7326.177,
+      "chunk_p95_ms": 14195.986,
+      "chunk_p99_ms": 14830.413,
+      "chunks": 400,
+      "download_mib_per_s": null,
+      "downloads_verified": null,
+      "retries": 0,
+      "retry_rate": 0.0,
+      "errors": {}
+    }
+  ],
+  "median": {
+    "upload_mib_per_s": 76.6,
+    "chunk_p50_ms": 7326.2,
+    "chunk_p95_ms": 14411.2,
+    "chunk_p99_ms": 15133.1,
+    "download_mib_per_s": null
+  }
+}
