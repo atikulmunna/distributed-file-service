@@ -215,7 +215,9 @@ def test_resume_after_reload_is_offered_and_finishes(browser, tmp_path) -> None:
         assert "chunks already on server" in offer.text_content()
         offer.click()
         page.locator("#events li span", has_text="Upload completed").wait_for(timeout=120_000)
-        assert page.locator("#upload-detail .status[data-status=COMPLETED]").count() == 1
+        page.locator("#upload-detail .status[data-status=COMPLETED]").wait_for(
+            timeout=10_000
+        )  # the detail refreshes after the event
         context.close()
     assert errors == []
 
