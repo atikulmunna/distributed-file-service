@@ -1,0 +1,112 @@
+{
+  "description": "Interleaved A/B of W1 (20 x 64 MiB, 8 MiB chunks, multipart): Task 9 code (6c8c814) vs Task 10 code (9c5a7cc), with the bench bucket's total bytes measured before and after every run.",
+  "method": "3 rounds; odd rounds run prev first, even rounds run new first; bench S3 volume reset before the comparison",
+  "server_code": {
+    "prev": "6c8c814",
+    "new": "9c5a7cc"
+  },
+  "runs": {
+    "prev": [
+      {
+        "round": 1,
+        "ok": 20,
+        "up": 49.787,
+        "down": 107.679,
+        "verified": 20,
+        "p50": 3670.31,
+        "errors": {},
+        "bytes_written": 2684354560,
+        "stored_ratio": 2.0
+      },
+      {
+        "round": 2,
+        "ok": 20,
+        "up": 68.216,
+        "down": 143.652,
+        "verified": 20,
+        "p50": 2906.133,
+        "errors": {},
+        "bytes_written": 2684354560,
+        "stored_ratio": 2.0
+      },
+      {
+        "round": 3,
+        "ok": 20,
+        "up": 69.828,
+        "down": 139.785,
+        "verified": 20,
+        "p50": 2717.971,
+        "errors": {},
+        "bytes_written": 2684354560,
+        "stored_ratio": 2.0
+      }
+    ],
+    "new": [
+      {
+        "round": 1,
+        "ok": 20,
+        "up": 65.571,
+        "down": 113.303,
+        "verified": 20,
+        "p50": 3176.004,
+        "errors": {},
+        "bytes_written": 1342177280,
+        "stored_ratio": 1.0
+      },
+      {
+        "round": 2,
+        "ok": 20,
+        "up": 68.717,
+        "down": 113.088,
+        "verified": 20,
+        "p50": 3023.102,
+        "errors": {},
+        "bytes_written": 1342177280,
+        "stored_ratio": 1.0
+      },
+      {
+        "round": 3,
+        "ok": 20,
+        "up": 89.628,
+        "down": 154.157,
+        "verified": 20,
+        "p50": 2368.223,
+        "errors": {},
+        "bytes_written": 1342177280,
+        "stored_ratio": 1.0
+      }
+    ]
+  },
+  "median": {
+    "prev": {
+      "upload_mib_per_s": 68.216,
+      "download_mib_per_s": 139.785,
+      "chunk_p50_ms": 2906.133,
+      "stored_bytes_per_upload_x_file_size": 2.0
+    },
+    "new": {
+      "upload_mib_per_s": 68.717,
+      "download_mib_per_s": 113.303,
+      "chunk_p50_ms": 3023.102,
+      "stored_bytes_per_upload_x_file_size": 1.0
+    }
+  },
+  "paired_diff_new_minus_prev": {
+    "up": [
+      15.78,
+      0.5,
+      19.8
+    ],
+    "down": [
+      5.62,
+      -30.56,
+      14.37
+    ],
+    "p50": [
+      -494.31,
+      116.97,
+      -349.75
+    ]
+  },
+  "interpretation": "Bytes written to storage per upload halved in every run (2.0x to 1.0x the file size): the double write is gone. Upload throughput was higher in all 3 paired rounds (+15.8, +0.5, +19.8 MiB/s; mean +19%), but run-to-run variance is wide and the medians are close (68.2 vs 68.7 MiB/s). Download throughput shows no consistent change (+5.6, -30.6, +14.4 MiB/s). All 120 uploads and downloads completed and verified."
+}

@@ -5,34 +5,237 @@ on:
     branches: ["main"]
   pull_request:
     branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  test:
+  lint:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ["3.12"]
-
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
+      - name: Set up Python and dependencies
+        uses: ./.github/actions/setup
 
-      - name: Install dependencies
+      - name: Lint
+        run: ruff check app tests scripts alembic
+
+      - name: Formatting
+        run: ruff format --check app tests scripts alembic
+
+      - name: Type check
+        run: mypy
+
+  audit:
+    # Known vulnerabilities in every locked package, transitive ones included.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python and dependencies
+        uses: ./.github/actions/setup
+
+      - name: Audit the locked dependencies
+        run: pip-audit -r requirements.lock --require-hashes --disable-pip --progress-spinner off
+
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build the image
+        run: docker build -t dfs:ci .
+
+      - name: Runs as an unprivileged user
         run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          uid=$(docker run --rm dfs:ci id -u)
+          echo "uid=$uid"
+          test "$uid" != "0"
 
-      - name: Run Alembic migrations on clean DB
+      - name: Contains no compiler
+        run: docker run --rm dfs:ci sh -c '! command -v gcc && ! command -v cc'
+
+      - name: Refuses the development keys (the image defaults to production)
+        run: |
+          if out=$(timeout 60 docker run --rm dfs:ci 2>&1); then
+            echo "the image started with the development keys"; exit 1
+          fi
+          echo "$out" | grep "refusing to start in production"
+
+      - name: Image size
+        run: docker image inspect dfs:ci --format '{{.Size}}' | awk '{ printf "%.1f MB\n", $1 / 1e6 }'
+
+  e2e:
+    # Browser smoke test: the UI against a real server in headless Chromium. Each test starts
+    # its own server (SQLite, local storage) and uploads, resumes, retries and downloads through the page.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python and dependencies
+        uses: ./.github/actions/setup
+
+      - name: Install Playwright and Chromium
+        run: |
+          pip install -r requirements-e2e.txt
+          python -m playwright install --with-deps chromium
+
+      - name: Run the browser smoke test
+        env:
+          RUN_E2E: "1"
+        run: pytest -q tests/e2e
+
+  test-sqlite:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python and dependencies
+        uses: ./.github/actions/setup
+
+      - name: Run Alembic migrations on a clean SQLite DB
         env:
           DATABASE_URL: sqlite:///./ci_migration_check.db
-        run: |
-          alembic upgrade head
+        run: alembic upgrade head
 
-      - name: Run tests
+      - name: Run tests on SQLite, with the coverage floor (pyproject.toml)
+        run: pytest -q --cov=app --cov-report=term
+
+  test-postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: dfs
+          POSTGRES_PASSWORD: dfs
+          POSTGRES_DB: dfs
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U dfs -d dfs"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      DATABASE_URL: postgresql+psycopg://dfs:dfs@localhost:5432/dfs
+      TEST_DATABASE_URL: postgresql+psycopg://dfs:dfs@localhost:5432/dfs_test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python and dependencies
+        uses: ./.github/actions/setup
+
+      - name: Run Alembic migrations on a clean Postgres DB
+        run: alembic upgrade head
+
+      - name: Check that models and migrations agree
+        run: alembic check
+
+      - name: Run tests on Postgres
+        run: pytest -q
+
+  s3-compat:
+    # Integration tests against a real S3-compatible server (Versity Gateway; MinIO images are no
+    # longer publicly pullable). Started with docker run because service containers cannot pass
+    # the backend arguments this image needs.
+    runs-on: ubuntu-latest
+    env:
+      RUN_S3_INTEGRATION: "1"
+      S3_INTEGRATION_ENDPOINT_URL: http://localhost:7070
+      S3_INTEGRATION_BUCKET: dfs-it
+      AWS_ACCESS_KEY_ID: ci-access-key
+      AWS_SECRET_ACCESS_KEY: ci-secret-key-not-a-real-secret
+      AWS_REGION: us-east-1
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python and dependencies
+        uses: ./.github/actions/setup
+
+      - name: Start Versity Gateway
         run: |
-          pytest -q
+          docker run -d --name s3 -p 7070:7070 \
+            -e ROOT_ACCESS_KEY="$AWS_ACCESS_KEY_ID" -e ROOT_SECRET_KEY="$AWS_SECRET_ACCESS_KEY" \
+            -e VGW_BACKEND=posix -e VGW_BACKEND_ARG=/data -v s3data:/data \
+            versity/versitygw:v1.10.0
+          for i in $(seq 1 30); do
+            if curl -s -o /dev/null http://localhost:7070; then exit 0; fi
+            sleep 1
+          done
+          docker logs s3
+          exit 1
+
+      - name: Run S3 integration tests
+        run: pytest -q tests/test_s3_integration_optional.py
+
+  redis-jobs:
+    # Job queue semantics (Redis Streams, consumer group, lease takeover) on a real Redis.
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      RUN_REDIS_INTEGRATION: "1"
+      REDIS_URL: redis://localhost:6379/0
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python and dependencies
+        uses: ./.github/actions/setup
+
+      - name: Run Redis job queue integration tests
+        run: pytest -q tests/test_redis_jobs_integration_optional.py
+
+
+  multi-instance:
+    # Two app instances behind nginx, a separate verification worker, Redis, Postgres, and
+    # S3-compatible storage (compose profile "cluster").
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python and dependencies
+        uses: ./.github/actions/setup
+
+      - name: Start the cluster
+        run: |
+          docker compose --profile cluster up -d --build nginx finalizer-cluster
+          for i in $(seq 1 90); do
+            if curl -sf http://localhost:8080/ready > /dev/null; then exit 0; fi
+            sleep 2
+          done
+          docker compose --profile cluster ps
+          docker compose --profile cluster logs --tail 50
+          exit 1
+
+      - name: Run multi-instance tests
+        env:
+          RUN_MULTI_INSTANCE: "1"
+        run: pytest -q tests/test_multi_instance_optional.py
+
+      - name: Stop the cluster
+        if: always()
+        run: docker compose --profile cluster down -v

@@ -5,7 +5,6 @@ import pytest
 
 from app.storage import S3ChunkStorage
 
-
 RUN_R2_INTEGRATION = os.getenv("RUN_R2_INTEGRATION") == "1"
 R2_BUCKET = os.getenv("R2_BUCKET", "")
 R2_ACCOUNT_ID = os.getenv("R2_ACCOUNT_ID", "")

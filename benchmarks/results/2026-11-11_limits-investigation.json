@@ -1,0 +1,70 @@
+{
+  "description": "What limits throughput on this machine: W1 from inside the Docker network (bypassing port forwarding) against one app instance and against two instances behind nginx, 2 runs each; CPU sampled during W1 from the host.",
+  "w1_inside_network_one_instance": [
+    {
+      "uploads_ok": 20,
+      "uploads": 20,
+      "upload_mib_per_s": 105.253,
+      "chunk_p50_ms": 840.215,
+      "chunk_p95_ms": 1716.988,
+      "chunk_p99_ms": 2286.678,
+      "chunks": 160,
+      "download_mib_per_s": 470.692,
+      "downloads_verified": 20,
+      "retries": 0,
+      "retry_rate": 0.0,
+      "errors": {}
+    },
+    {
+      "uploads_ok": 20,
+      "uploads": 20,
+      "upload_mib_per_s": 115.587,
+      "chunk_p50_ms": 1536.352,
+      "chunk_p95_ms": 2777.949,
+      "chunk_p99_ms": 2899.498,
+      "chunks": 160,
+      "download_mib_per_s": 415.49,
+      "downloads_verified": 20,
+      "retries": 0,
+      "retry_rate": 0.0,
+      "errors": {}
+    }
+  ],
+  "w1_inside_network_two_instances": [
+    {
+      "uploads_ok": 20,
+      "uploads": 20,
+      "upload_mib_per_s": 141.905,
+      "chunk_p50_ms": 872.86,
+      "chunk_p95_ms": 1979.198,
+      "chunk_p99_ms": 2223.521,
+      "chunks": 160,
+      "download_mib_per_s": 206.103,
+      "downloads_verified": 20,
+      "retries": 0,
+      "retry_rate": 0.0,
+      "errors": {}
+    },
+    {
+      "uploads_ok": 20,
+      "uploads": 20,
+      "upload_mib_per_s": 153.562,
+      "chunk_p50_ms": 700.902,
+      "chunk_p95_ms": 2543.769,
+      "chunk_p99_ms": 2668.548,
+      "chunks": 160,
+      "download_mib_per_s": 238.556,
+      "downloads_verified": 20,
+      "retries": 0,
+      "retry_rate": 0.0,
+      "errors": {}
+    }
+  ],
+  "w1_from_host_cpu_percent_one_instance": {
+    "dfs-app-bench": 72.0,
+    "dfs-s3": 26.0,
+    "dfs-postgres": 6.0
+  },
+  "c128_from_host_app_memory_peak": "2.46 GiB",
+  "note": "The two-instance runs used the cluster profile with API_RATE_LIMIT_PER_MINUTE=0; with its default of 100 per minute, W1 spends its time waiting on 429."
+}

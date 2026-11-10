@@ -1,0 +1,94 @@
+{
+  "description": "Interleaved A/B of W2 (100 concurrent uploads): Task 7 code (9cf2a35) vs Task 8 code (279703b).",
+  "method": "4 rounds; odd rounds run prev first, even rounds run new first. The prev image runs without migrations because the shared bench DB is already at the newer, additive head.",
+  "server_code": {
+    "prev": "9cf2a35",
+    "new": "279703b"
+  },
+  "runs": {
+    "prev": [
+      {
+        "round": 1,
+        "timestamp_utc": "2026-11-09T13:17:21+00:00",
+        "uploads_ok": 100,
+        "upload_mib_per_s": 51.819,
+        "chunk_p50_ms": 12439.631,
+        "errors_by_status": {}
+      },
+      {
+        "round": 2,
+        "timestamp_utc": "2026-11-09T13:19:28+00:00",
+        "uploads_ok": 40,
+        "upload_mib_per_s": 6.755,
+        "chunk_p50_ms": 15377.466,
+        "errors_by_status": {
+          "500": 71
+        }
+      },
+      {
+        "round": 3,
+        "timestamp_utc": "2026-11-09T13:21:06+00:00",
+        "uploads_ok": 100,
+        "upload_mib_per_s": 26.6,
+        "chunk_p50_ms": 22431.999,
+        "errors_by_status": {}
+      },
+      {
+        "round": 4,
+        "timestamp_utc": "2026-11-09T13:23:52+00:00",
+        "uploads_ok": 100,
+        "upload_mib_per_s": 29.573,
+        "chunk_p50_ms": 16844.435,
+        "errors_by_status": {}
+      }
+    ],
+    "new": [
+      {
+        "round": 1,
+        "timestamp_utc": "2026-11-09T13:17:54+00:00",
+        "uploads_ok": 100,
+        "upload_mib_per_s": 38.299,
+        "chunk_p50_ms": 13558.191,
+        "errors_by_status": {}
+      },
+      {
+        "round": 2,
+        "timestamp_utc": "2026-11-09T13:18:38+00:00",
+        "uploads_ok": 100,
+        "upload_mib_per_s": 33.862,
+        "chunk_p50_ms": 16404.188,
+        "errors_by_status": {}
+      },
+      {
+        "round": 3,
+        "timestamp_utc": "2026-11-09T13:22:11+00:00",
+        "uploads_ok": 100,
+        "upload_mib_per_s": 36.732,
+        "chunk_p50_ms": 13890.368,
+        "errors_by_status": {}
+      },
+      {
+        "round": 4,
+        "timestamp_utc": "2026-11-09T13:22:56+00:00",
+        "uploads_ok": 100,
+        "upload_mib_per_s": 30.073,
+        "chunk_p50_ms": 16707.519,
+        "errors_by_status": {}
+      }
+    ]
+  },
+  "median": {
+    "prev": {
+      "uploads_ok": 100.0,
+      "upload_mib_per_s": 28.0865,
+      "chunk_p50_ms": 16110.9505
+    },
+    "new": {
+      "uploads_ok": 100.0,
+      "upload_mib_per_s": 35.297,
+      "chunk_p50_ms": 15147.277999999998
+    }
+  },
+  "additional_new_runs": "An earlier A/B attempt ran the Task 8 code 5 more times: 100/100 uploads in all 5 (29.8, 38.4, 41.8, 34.8, 34.0 MiB/s, zero errors); its Task 7 side was invalid (the old image failed to start) and is not used.",
+  "interpretation": "Task 8 makes W2 reliable: the Task 8 code completed 100/100 uploads in every run (4 here plus 5 earlier, 9 of 9) with zero errors, while the Task 7 code still failed intermittently on DB pool timeouts in complete. Fix: complete no longer holds a DB connection during storage work."
+}

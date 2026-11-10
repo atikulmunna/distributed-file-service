@@ -1,0 +1,110 @@
+{
+  "description": "Interleaved A/B of workload W3 on one bench stack: baseline code (bf5c2cb) on port 8002 and Task 4 code (6a44032) on port 8001, same Postgres, same S3 volume, alternating runs.",
+  "method": "3 rounds, each round runs baseline then new; medians reported",
+  "runs": {
+    "baseline": [
+      {
+        "timestamp_utc": "2026-11-09T11:09:50+00:00",
+        "upload_mib_per_s": 35.636,
+        "download_mib_per_s": 98.616,
+        "chunk_latency_ms": {
+          "count": 128,
+          "avg": 1581.045,
+          "p50": 1560.608,
+          "p95": 2006.196,
+          "p99": 2055.382,
+          "max": 2058.631
+        },
+        "errors_by_status": {}
+      },
+      {
+        "timestamp_utc": "2026-11-09T11:11:09+00:00",
+        "upload_mib_per_s": 36.406,
+        "download_mib_per_s": 100.32,
+        "chunk_latency_ms": {
+          "count": 128,
+          "avg": 1537.148,
+          "p50": 1488.565,
+          "p95": 2317.198,
+          "p99": 2338.318,
+          "max": 2340.066
+        },
+        "errors_by_status": {}
+      },
+      {
+        "timestamp_utc": "2026-11-09T11:12:29+00:00",
+        "upload_mib_per_s": 31.434,
+        "download_mib_per_s": 97.166,
+        "chunk_latency_ms": {
+          "count": 128,
+          "avg": 1765.639,
+          "p50": 1608.603,
+          "p95": 3022.858,
+          "p99": 3111.487,
+          "max": 3140.837
+        },
+        "errors_by_status": {}
+      }
+    ],
+    "new": [
+      {
+        "timestamp_utc": "2026-11-09T11:10:33+00:00",
+        "upload_mib_per_s": 46.489,
+        "download_mib_per_s": 99.895,
+        "chunk_latency_ms": {
+          "count": 128,
+          "avg": 1178.025,
+          "p50": 1204.038,
+          "p95": 1615.057,
+          "p99": 1836.239,
+          "max": 1907.509
+        },
+        "errors_by_status": {}
+      },
+      {
+        "timestamp_utc": "2026-11-09T11:11:52+00:00",
+        "upload_mib_per_s": 44.244,
+        "download_mib_per_s": 97.451,
+        "chunk_latency_ms": {
+          "count": 128,
+          "avg": 1255.741,
+          "p50": 1333.178,
+          "p95": 1818.247,
+          "p99": 1915.71,
+          "max": 1928.668
+        },
+        "errors_by_status": {}
+      },
+      {
+        "timestamp_utc": "2026-11-09T11:13:16+00:00",
+        "upload_mib_per_s": 44.911,
+        "download_mib_per_s": 100.176,
+        "chunk_latency_ms": {
+          "count": 128,
+          "avg": 1244.017,
+          "p50": 1269.9,
+          "p95": 1802.645,
+          "p99": 2078.831,
+          "max": 2079.633
+        },
+        "errors_by_status": {}
+      }
+    ]
+  },
+  "median": {
+    "baseline": {
+      "upload_mib_per_s": 35.636,
+      "download_mib_per_s": 98.616,
+      "chunk_p50_ms": 1560.608
+    },
+    "new": {
+      "upload_mib_per_s": 44.911,
+      "download_mib_per_s": 99.895,
+      "chunk_p50_ms": 1269.9
+    }
+  },
+  "server_code": {
+    "baseline": "bf5c2cb",
+    "new": "6a44032"
+  }
+}

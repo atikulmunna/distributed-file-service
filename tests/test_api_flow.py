@@ -1,29 +1,16 @@
-import shutil
 import hashlib
-from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import delete
 
-from app.db import Base, SessionLocal, engine
+from app.db import SessionLocal, engine
+from app.finalizer import process
+from app.jobs import FinalizeJob
 from app.main import app, upload_limiter
-from app.models import Chunk, ChunkRequestIdempotency, CompleteRequestIdempotency, InitRequestIdempotency, Upload
+from app.models import Chunk, ChunkRequestIdempotency, CompleteRequestIdempotency, Upload
 from app.worker import executor
 
 AUTH_HEADERS = {"X-API-Key": "dev-key"}
-
-
-def _reset_state() -> None:
-    Base.metadata.drop_all(bind=engine)
-    Base.metadata.create_all(bind=engine)
-    with SessionLocal() as db:
-        db.execute(delete(ChunkRequestIdempotency))
-        db.execute(delete(CompleteRequestIdempotency))
-        db.execute(delete(InitRequestIdempotency))
-        db.execute(delete(Chunk))
-        db.execute(delete(Upload))
-        db.commit()
-    shutil.rmtree(Path("data"), ignore_errors=True)
 
 
 def _init_upload(client: TestClient, file_size: int, chunk_size: int, headers: dict | None = None) -> str:
@@ -51,7 +38,6 @@ def _init_upload_with_payload(client: TestClient, payload: dict, headers: dict |
 
 
 def test_upload_resume_complete_download_flow() -> None:
-    _reset_state()
     with TestClient(app) as client:
         client.headers.update(AUTH_HEADERS)
         upload_id = _init_upload(client, file_size=11, chunk_size=4)
@@ -84,7 +70,6 @@ def test_upload_resume_complete_download_flow() -> None:
 
 
 def test_complete_rejects_when_chunks_missing() -> None:
-    _reset_state()
     with TestClient(app) as client:
         client.headers.update(AUTH_HEADERS)
         upload_id = _init_upload(client, file_size=8, chunk_size=4)
@@ -101,7 +86,6 @@ def test_complete_rejects_when_chunks_missing() -> None:
 
 
 def test_metrics_endpoint_available() -> None:
-    _reset_state()
     with TestClient(app) as client:
         client.headers.update(AUTH_HEADERS)
         metrics = client.get("/metrics")
@@ -111,7 +95,6 @@ def test_metrics_endpoint_available() -> None:
 
 
 def test_init_idempotency_key_reuses_upload() -> None:
-    _reset_state()
     with TestClient(app) as client:
         client.headers.update(AUTH_HEADERS)
         headers = {"Idempotency-Key": "init-req-1"}
@@ -135,7 +118,6 @@ def test_init_idempotency_key_reuses_upload() -> None:
 
 
 def test_chunk_idempotency_key_replay_does_not_duplicate_rows() -> None:
-    _reset_state()
     with TestClient(app) as client:
         client.headers.update(AUTH_HEADERS)
         upload_id = _init_upload(client, file_size=4, chunk_size=4)
@@ -151,16 +133,13 @@ def test_chunk_idempotency_key_replay_does_not_duplicate_rows() -> None:
         with SessionLocal() as db:
             total_chunks = db.query(Chunk).filter(Chunk.upload_id == upload_id).count()
             total_chunk_idempotency = (
-                db.query(ChunkRequestIdempotency)
-                .filter(ChunkRequestIdempotency.upload_id == upload_id)
-                .count()
+                db.query(ChunkRequestIdempotency).filter(ChunkRequestIdempotency.upload_id == upload_id).count()
             )
             assert total_chunks == 1
             assert total_chunk_idempotency == 1
 
 
 def test_upload_status_transitions_and_upload_block_after_complete() -> None:
-    _reset_state()
     with TestClient(app) as client:
         client.headers.update(AUTH_HEADERS)
         upload_id = _init_upload(client, file_size=4, chunk_size=4)
@@ -195,7 +174,6 @@ def test_upload_status_transitions_and_upload_block_after_complete() -> None:
 
 
 def test_complete_idempotency_replay() -> None:
-    _reset_state()
     with TestClient(app) as client:
         client.headers.update(AUTH_HEADERS)
         upload_id = _init_upload(client, file_size=4, chunk_size=4)
@@ -216,15 +194,12 @@ def test_complete_idempotency_replay() -> None:
 
         with SessionLocal() as db:
             total_complete_idempotency = (
-                db.query(CompleteRequestIdempotency)
-                .filter(CompleteRequestIdempotency.upload_id == upload_id)
-                .count()
+                db.query(CompleteRequestIdempotency).filter(CompleteRequestIdempotency.upload_id == upload_id).count()
             )
             assert total_complete_idempotency == 1
 
 
 def test_throttled_queue_full_returns_retry_headers() -> None:
-    _reset_state()
     old_queue_maxsize = executor.queue_maxsize
     executor.queue_maxsize = 0
     try:
@@ -244,7 +219,6 @@ def test_throttled_queue_full_returns_retry_headers() -> None:
 
 
 def test_throttled_per_upload_limit_returns_retry_headers() -> None:
-    _reset_state()
     old_limit = upload_limiter.limit
     old_fair = upload_limiter.fair_share_limit
     upload_limiter.limit = 0
@@ -267,7 +241,6 @@ def test_throttled_per_upload_limit_returns_retry_headers() -> None:
 
 
 def test_init_idempotency_conflict_for_different_payload() -> None:
-    _reset_state()
     with TestClient(app) as client:
         client.headers.update(AUTH_HEADERS)
         headers = {"Idempotency-Key": "init-conflict-1"}
@@ -286,7 +259,6 @@ def test_init_idempotency_conflict_for_different_payload() -> None:
 
 
 def test_chunk_idempotency_conflict_for_different_payload() -> None:
-    _reset_state()
     with TestClient(app) as client:
         client.headers.update(AUTH_HEADERS)
         upload_id = _init_upload(client, file_size=4, chunk_size=4)
@@ -298,7 +270,6 @@ def test_chunk_idempotency_conflict_for_different_payload() -> None:
 
 
 def test_complete_idempotency_conflict_for_different_uploads() -> None:
-    _reset_state()
     with TestClient(app) as client:
         client.headers.update(AUTH_HEADERS)
         upload_a = _init_upload(client, file_size=4, chunk_size=4)
@@ -320,7 +291,6 @@ def test_complete_idempotency_conflict_for_different_uploads() -> None:
 
 
 def test_chunk_checksum_header_rejects_mismatch() -> None:
-    _reset_state()
     with TestClient(app) as client:
         client.headers.update(AUTH_HEADERS)
         upload_id = _init_upload(client, file_size=4, chunk_size=4)
@@ -334,7 +304,6 @@ def test_chunk_checksum_header_rejects_mismatch() -> None:
 
 
 def test_file_checksum_validated_on_complete_success() -> None:
-    _reset_state()
     payload = b"abcdefgh"
     checksum = hashlib.sha256(payload).hexdigest()
     with TestClient(app) as client:
@@ -362,12 +331,13 @@ def test_file_checksum_validated_on_complete_success() -> None:
         assert second.status_code == 202
 
         complete = client.post(f"/v1/uploads/{upload_id}/complete")
-        assert complete.status_code == 200
-        assert complete.json()["status"] == "COMPLETED"
+        assert complete.status_code == 202
+        assert complete.json()["status"] == "VERIFYING"
+        process(FinalizeJob(upload_id))  # the verification worker
+        assert client.get(f"/v1/uploads/{upload_id}").json()["status"] == "COMPLETED"
 
 
 def test_file_checksum_validated_on_complete_mismatch() -> None:
-    _reset_state()
     with TestClient(app) as client:
         client.headers.update(AUTH_HEADERS)
         upload_id = _init_upload_with_payload(
@@ -393,5 +363,21 @@ def test_file_checksum_validated_on_complete_mismatch() -> None:
         assert second.status_code == 202
 
         complete = client.post(f"/v1/uploads/{upload_id}/complete")
-        assert complete.status_code == 409
-        assert "checksum mismatch" in complete.text
+        assert complete.status_code == 202
+        process(FinalizeJob(upload_id))  # the verification worker
+        status = client.get(f"/v1/uploads/{upload_id}").json()
+        assert status["status"] == "FAILED"
+        assert "checksum mismatch" in status["failure_reason"]
+
+
+@pytest.mark.skipif(engine.dialect.name != "postgresql", reason="32-bit INTEGER overflow only exists on Postgres")
+def test_file_over_2gib_persists(client, auth_headers) -> None:
+    file_size = 3 * 1024**3
+    response = client.post(
+        "/v1/uploads/init",
+        json={"file_name": "big.bin", "file_size": file_size},
+        headers=auth_headers,
+    )
+    assert response.status_code == 201, response.text
+    with SessionLocal() as db:
+        assert db.get(Upload, response.json()["upload_id"]).file_size == file_size

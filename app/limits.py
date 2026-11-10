@@ -2,7 +2,7 @@ from threading import Lock
 
 from fastapi import HTTPException
 
-from app.metrics import throttled_requests_total
+from app.metrics import count_throttled
 from app.worker import THROTTLE_HEADERS_BASE
 
 
@@ -17,14 +17,14 @@ class PerUploadInflightLimiter:
         with self._lock:
             current = self._counts.get(upload_id, 0)
             if current >= self.limit:
-                throttled_requests_total.inc()
+                count_throttled()
                 raise HTTPException(
                     status_code=429,
                     detail="per-upload inflight chunk limit reached",
                     headers={**THROTTLE_HEADERS_BASE, "X-RateLimit-Reason": "upload_inflight_limit"},
                 )
             if self.fair_share_limit is not None and self.fair_share_limit > 0 and current >= self.fair_share_limit:
-                throttled_requests_total.inc()
+                count_throttled()
                 raise HTTPException(
                     status_code=429,
                     detail="per-upload fair-share limit reached",

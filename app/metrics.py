@@ -1,6 +1,8 @@
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
 from starlette.responses import Response
 
+from app import rolling
+
 chunks_uploaded_total = Counter("chunks_uploaded_total", "Total chunks uploaded")
 bytes_uploaded_total = Counter("bytes_uploaded_total", "Total bytes uploaded")
 chunk_upload_failures_total = Counter("chunk_upload_failures_total", "Total failed chunk uploads")
@@ -14,11 +16,22 @@ worker_busy_count = Gauge("worker_busy_count", "Approximate busy workers")
 
 s3_put_latency_seconds = Histogram("s3_put_latency_seconds", "Chunk storage write latency in seconds")
 db_update_latency_seconds = Histogram("db_update_latency_seconds", "DB update latency in seconds")
+storage_breaker_state = Gauge("storage_breaker_state", "Storage circuit breaker: 0 closed, 1 open, 2 half-open")
+cleanup_errors_total = Counter("cleanup_errors_total", "Cleanup errors by step", ["step"])
+uploads_stuck_verifying = Gauge("uploads_stuck_verifying", "VERIFYING uploads inactive longer than the stale TTL")
+finalize_jobs_total = Counter("finalize_jobs_total", "Verification jobs by outcome", ["outcome"])
+finalize_duration_seconds = Histogram("finalize_duration_seconds", "Whole-file verification time in seconds")
 http_request_duration_seconds = Histogram(
     "http_request_duration_seconds",
     "HTTP request latency in seconds",
     ["method", "route", "status_code"],
 )
+
+
+def count_throttled() -> None:
+    """A request answered with 429: the Prometheus counter and the /v1/stats window."""
+    throttled_requests_total.inc()
+    rolling.throttled.record()
 
 
 def metrics_response() -> Response:

@@ -1,0 +1,69 @@
+{
+  "meta": {
+    "label": "baseline",
+    "timestamp_utc": "2026-11-09T10:31:07+00:00",
+    "git_sha": "bf5c2cbc723d25960485ae639043c5b7ff0c4c5c",
+    "git_dirty": true,
+    "platform": "Windows-11-10.0.26300-SP0",
+    "python": "3.12.13",
+    "cpu_count": 32,
+    "server_version": {
+      "app_name": "distributed-file-service",
+      "app_version": "dev",
+      "queue_backend": "memory",
+      "storage_backend": "s3"
+    }
+  },
+  "config": {
+    "workload": "W2",
+    "files": 100,
+    "file_size_bytes": 16777216,
+    "chunk_size_bytes": 5242880,
+    "concurrent_files": 100,
+    "per_file_chunk_workers": 2,
+    "download": false
+  },
+  "args": {
+    "base_url": "http://localhost:8001",
+    "workload": "W2",
+    "label": "baseline",
+    "files": 5,
+    "file_size_bytes": 5242880,
+    "chunk_size_bytes": 1048576,
+    "profile": "balanced",
+    "concurrent_files": null,
+    "per_file_chunk_workers": null,
+    "download": false,
+    "output": "",
+    "api_key": true
+  },
+  "upload": {
+    "files": 100,
+    "failed_files": 100,
+    "first_errors": [
+      "HTTP 500: {\"detail\":\"internal server error\",\"error_code\":\"internal_error\",\"request_id\":\"c5626836-6be2-4a0a-9ab1-3255c6f92116\",\"upload_id\":null,\"trace_id\":null}",
+      "HTTP 500: {\"detail\":\"internal server error\",\"error_code\":\"internal_error\",\"request_id\":\"12812f10-9972-4fea-ac83-a578eabce2af\",\"upload_id\":null,\"trace_id\":null}",
+      "HTTP 500: {\"detail\":\"internal server error\",\"error_code\":\"internal_error\",\"request_id\":\"eda84962-6dbc-47a0-824a-8153b4be44cb\",\"upload_id\":null,\"trace_id\":null}",
+      "HTTP 500: {\"detail\":\"internal server error\",\"error_code\":\"internal_error\",\"request_id\":\"3ff9d7a6-adfd-4291-b130-386f82cf96f9\",\"upload_id\":null,\"trace_id\":null}",
+      "HTTP 500: {\"detail\":\"internal server error\",\"error_code\":\"internal_error\",\"request_id\":\"a4d81e5b-2dc7-4843-b0a3-dfbc626678a1\",\"upload_id\":null,\"trace_id\":null}"
+    ],
+    "elapsed_seconds": 240.578,
+    "bytes": 0,
+    "throughput_mib_per_s": 0.0,
+    "chunk_latency_ms": {
+      "count": 0,
+      "avg": 0.0,
+      "p50": 0.0,
+      "p95": 0.0,
+      "p99": 0.0,
+      "max": 0.0
+    },
+    "file_total_ms_avg": 125576.178
+  },
+  "download": null,
+  "retries": 0,
+  "errors_by_status": {
+    "500": 22,
+    "transport:ReadTimeout": 129
+  }
+}

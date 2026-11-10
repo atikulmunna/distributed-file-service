@@ -10,3 +10,18 @@ migration_check_2.db
 ci_migration_check.db
 local_benchmark.db
 auth_migration_check.db
+
+# Local-only planning and agent files (never commit)
+CLAUDE.md
+tasks.md
+*srs*
+*SRS*
+*_Spec.md
+docs/superpowers/
+desktop.ini
+
+# Coverage output
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/

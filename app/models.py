@@ -1,16 +1,21 @@
 import enum
 import uuid
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Index, Integer, String, Text, UniqueConstraint, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
+
+# Prefix of failure_reason when whole-file verification finds a different checksum.
+CHECKSUM_MISMATCH = "file checksum mismatch"
 
 
 class UploadStatus(str, enum.Enum):
     initiated = "INITIATED"
     in_progress = "IN_PROGRESS"
+    completing = "COMPLETING"  # claimed by one complete request; storage work in progress
+    verifying = "VERIFYING"  # whole-file checksum verification pending (asynchronous, by a finalizer worker)
     completed = "COMPLETED"
     failed = "FAILED"
     aborted = "ABORTED"
@@ -22,24 +27,40 @@ class ChunkStatus(str, enum.Enum):
     failed = "FAILED"
 
 
+# 64-bit autoincrement key. SQLite only autoincrements a column declared exactly INTEGER
+# PRIMARY KEY (its 64-bit rowid), so SQLite gets INTEGER; everything else gets BIGINT.
+BIGINT_PK = BigInteger().with_variant(Integer, "sqlite")
+
+
 def utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class Upload(Base):
     __tablename__ = "uploads"
+    __table_args__ = (
+        Index("ix_uploads_status_last_activity", "status", "last_activity_at"),
+        Index("ix_uploads_owner_created", "owner_id", "created_at", "id"),  # GET /v1/uploads, newest first
+    )
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     owner_id: Mapped[str] = mapped_column(String(128), nullable=False, default="legacy")
     file_name: Mapped[str] = mapped_column(Text, nullable=False)
-    file_size: Mapped[int] = mapped_column(Integer, nullable=False)
-    chunk_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    file_size: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    chunk_size: Mapped[int] = mapped_column(BigInteger, nullable=False)
     total_chunks: Mapped[int] = mapped_column(Integer, nullable=False)
     file_checksum_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default=UploadStatus.initiated.value)
     multipart_upload_id: Mapped[str | None] = mapped_column(Text, nullable=True)
+    failure_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+    )
+    # Last progress (a chunk recorded or a status change); cleanup judges staleness by it.
+    last_activity_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, server_default=text("CURRENT_TIMESTAMP"), nullable=False
+    )
 
     chunks: Mapped[list["Chunk"]] = relationship(back_populates="upload", cascade="all, delete-orphan")
 
@@ -51,7 +72,7 @@ class Chunk(Base):
         Index("idx_chunks_upload_status", "upload_id", "status"),
     )
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BIGINT_PK, primary_key=True, autoincrement=True)
     upload_id: Mapped[str] = mapped_column(String(36), ForeignKey("uploads.id", ondelete="CASCADE"), nullable=False)
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -61,7 +82,9 @@ class Chunk(Base):
     status: Mapped[str] = mapped_column(String(32), nullable=False, default=ChunkStatus.pending.value)
     retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now, nullable=False
+    )
 
     upload: Mapped[Upload] = relationship(back_populates="chunks")
 
@@ -79,11 +102,9 @@ class InitRequestIdempotency(Base):
 
 class ChunkRequestIdempotency(Base):
     __tablename__ = "chunk_request_idempotency"
-    __table_args__ = (
-        UniqueConstraint("upload_id", "chunk_index", "idempotency_key", name="uq_chunk_idempotency"),
-    )
+    __table_args__ = (UniqueConstraint("upload_id", "chunk_index", "idempotency_key", name="uq_chunk_idempotency"),)
 
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    id: Mapped[int] = mapped_column(BIGINT_PK, primary_key=True, autoincrement=True)
     upload_id: Mapped[str] = mapped_column(String(36), ForeignKey("uploads.id", ondelete="CASCADE"), nullable=False)
     chunk_index: Mapped[int] = mapped_column(Integer, nullable=False)
     idempotency_key: Mapped[str] = mapped_column(String(128), nullable=False)

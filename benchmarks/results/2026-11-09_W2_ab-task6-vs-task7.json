@@ -1,0 +1,109 @@
+{
+  "description": "Interleaved A/B of W2 (100 concurrent uploads): Task 6 vs Task 7 code.",
+  "method": "interleaved rounds; odd rounds run prev first, even rounds run new first",
+  "server_code": {
+    "prev": "147c86c",
+    "new": "4b3abf0"
+  },
+  "runs": {
+    "prev": [
+      {
+        "round": 1,
+        "timestamp_utc": "2026-11-09T12:42:21+00:00",
+        "uploads_ok": 54,
+        "uploads_total": 100,
+        "upload_mib_per_s": 10.139,
+        "chunk_p50_ms": 15367.022,
+        "errors_by_status": {
+          "500": 58
+        }
+      },
+      {
+        "round": 2,
+        "timestamp_utc": "2026-11-09T12:45:25+00:00",
+        "uploads_ok": 62,
+        "uploads_total": 100,
+        "upload_mib_per_s": 17.373,
+        "chunk_p50_ms": 11523.941,
+        "errors_by_status": {
+          "500": 40
+        }
+      },
+      {
+        "round": 3,
+        "timestamp_utc": "2026-11-09T12:46:25+00:00",
+        "uploads_ok": 83,
+        "uploads_total": 100,
+        "upload_mib_per_s": 18.165,
+        "chunk_p50_ms": 16993.512,
+        "errors_by_status": {
+          "500": 17
+        }
+      },
+      {
+        "round": 4,
+        "timestamp_utc": "2026-11-09T12:49:16+00:00",
+        "uploads_ok": 76,
+        "uploads_total": 100,
+        "upload_mib_per_s": 15.846,
+        "chunk_p50_ms": 18563.279,
+        "errors_by_status": {
+          "500": 24
+        }
+      }
+    ],
+    "new": [
+      {
+        "round": 1,
+        "timestamp_utc": "2026-11-09T12:43:48+00:00",
+        "uploads_ok": 100,
+        "uploads_total": 100,
+        "upload_mib_per_s": 57.487,
+        "chunk_p50_ms": 9513.135,
+        "errors_by_status": {}
+      },
+      {
+        "round": 2,
+        "timestamp_utc": "2026-11-09T12:44:18+00:00",
+        "uploads_ok": 82,
+        "uploads_total": 100,
+        "upload_mib_per_s": 20.414,
+        "chunk_p50_ms": 11789.703,
+        "errors_by_status": {
+          "500": 18
+        }
+      },
+      {
+        "round": 3,
+        "timestamp_utc": "2026-11-09T12:47:41+00:00",
+        "uploads_ok": 100,
+        "uploads_total": 100,
+        "upload_mib_per_s": 38.827,
+        "chunk_p50_ms": 16363.144,
+        "errors_by_status": {}
+      },
+      {
+        "round": 4,
+        "timestamp_utc": "2026-11-09T12:48:25+00:00",
+        "uploads_ok": 100,
+        "uploads_total": 100,
+        "upload_mib_per_s": 33.235,
+        "chunk_p50_ms": 16976.752,
+        "errors_by_status": {}
+      }
+    ]
+  },
+  "median": {
+    "prev": {
+      "uploads_ok": 69.0,
+      "upload_mib_per_s": 16.6095,
+      "chunk_p50_ms": 16180.267
+    },
+    "new": {
+      "uploads_ok": 100.0,
+      "upload_mib_per_s": 36.031,
+      "chunk_p50_ms": 14076.4235
+    }
+  },
+  "interpretation": "W2 is not reliable on either version: Task 6 completed 54, 62, 83, 76 of 100; Task 7 completed 100, 82, 100, 100. Failures are DB pool timeouts; on the Task 7 code they were concentrated in complete (17 of 20 in a diagnostic run), and pg_stat_activity showed complete requests idle in transaction after loading chunks while waiting on the S3 multipart completion. Earlier single-run W2 results of 100/100 (after Tasks 4 and 6) were not representative. Fix planned in Task 8 (complete releases its connection before storage work)."
+}

@@ -1,0 +1,58 @@
+# Tool configuration only: the service is not packaged. Tool versions are pinned in requirements-dev.txt.
+
+[tool.ruff]
+target-version = "py312"
+line-length = 120
+extend-exclude = [".superpowers"]
+
+[tool.ruff.lint]
+# Listed explicitly so a ruff upgrade cannot change what CI enforces.
+select = [
+    "E", "W",   # pycodestyle
+    "F",        # pyflakes
+    "I",        # import order
+    "B",        # bugbear
+    "UP",       # pyupgrade
+    "SIM",      # simplify
+    "C4",       # comprehensions
+    "RET",      # return statements
+    "BLE",      # blind except
+    "ASYNC",    # blocking calls in async code
+    "PT",       # pytest style
+    "RUF",      # ruff-specific
+]
+ignore = [
+    "E501",   # the formatter owns line length; long strings and URLs are left unbroken
+    "UP042",  # StrEnum changes str() and format() of statuses that logs and comparisons rely on
+]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI declares dependencies and parameters as call defaults: that is the framework's API.
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Header", "fastapi.Query", "fastapi.Body", "fastapi.Path"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["app", "scripts", "tests"]
+known-third-party = ["alembic"]  # the local alembic/ directory holds migrations, not the package
+
+[tool.ruff.lint.per-file-ignores]
+"tests/conftest.py" = ["E402"]  # the environment is fixed before any app module is imported
+"scripts/*" = ["BLE001"]        # command-line diagnostics report any failure instead of raising
+
+[tool.mypy]
+python_version = "3.12"
+files = ["app"]
+plugins = ["pydantic.mypy"]  # pydantic models and settings (BaseSettings accepts _env_file)
+ignore_missing_imports = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+
+[tool.coverage.run]
+source = ["app"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+# Measured 87.40% (line and branch) on the SQLite suite when this gate was added; raise it as tests grow.
+# The Redis and S3 backends are exercised by the integration jobs, which this number does not include.
+fail_under = 87

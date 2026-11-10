@@ -3,13 +3,11 @@ import uuid
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import delete
 
-from app.db import Base, SessionLocal, engine
+import app.routes.uploads as upload_routes
+from app.config import settings
 from app.main import app
-from app.models import Chunk, ChunkRequestIdempotency, CompleteRequestIdempotency, InitRequestIdempotency, Upload
-from app.storage import storage
-
+from app.storage import S3ChunkStorage
 
 RUN_R2_INTEGRATION = os.getenv("RUN_R2_INTEGRATION") == "1"
 R2_BUCKET = os.getenv("R2_BUCKET", "")
@@ -19,23 +17,20 @@ R2_SECRET_ACCESS_KEY = os.getenv("R2_SECRET_ACCESS_KEY", "")
 
 
 @pytest.mark.skipif(
-    not RUN_R2_INTEGRATION
-    or not R2_BUCKET
-    or not R2_ACCOUNT_ID
-    or not R2_ACCESS_KEY_ID
-    or not R2_SECRET_ACCESS_KEY,
+    not RUN_R2_INTEGRATION or not R2_BUCKET or not R2_ACCOUNT_ID or not R2_ACCESS_KEY_ID or not R2_SECRET_ACCESS_KEY,
     reason="Set RUN_R2_INTEGRATION=1 and R2_* env vars to run API-level Cloudflare R2 integration tests.",
 )
-def test_api_r2_full_upload_download_flow() -> None:
-    Base.metadata.drop_all(bind=engine)
-    Base.metadata.create_all(bind=engine)
-    with SessionLocal() as db:
-        db.execute(delete(ChunkRequestIdempotency))
-        db.execute(delete(CompleteRequestIdempotency))
-        db.execute(delete(InitRequestIdempotency))
-        db.execute(delete(Chunk))
-        db.execute(delete(Upload))
-        db.commit()
+def test_api_r2_full_upload_download_flow(monkeypatch) -> None:
+    # The test harness forces local storage; this opt-in test points the running app at R2.
+    storage = S3ChunkStorage(
+        bucket=R2_BUCKET,
+        region="auto",
+        endpoint_url=os.getenv("R2_ENDPOINT_URL") or f"https://{R2_ACCOUNT_ID}.r2.cloudflarestorage.com",
+        access_key_id=R2_ACCESS_KEY_ID,
+        secret_access_key=R2_SECRET_ACCESS_KEY,
+    )
+    monkeypatch.setattr(settings, "storage_backend", "r2")
+    monkeypatch.setattr(upload_routes, "storage", storage)
 
     file_bytes = b"hello-r2-api-test"
     chunk_size = 6

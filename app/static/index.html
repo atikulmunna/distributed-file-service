@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <title>File Service</title>
+    <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/static/app.css">
+    <script type="module" src="/static/app.js"></script>
+  </head>
+  <body>
+    <header class="masthead">
+      <div class="masthead-row">
+        <h1 class="wordmark">File Service</h1>
+        <dl class="server-facts" aria-label="This server">
+          <div><dt>Instance</dt><dd id="fact-instance" class="ident">checking</dd></div>
+          <div><dt>Version</dt><dd id="fact-version">checking</dd></div>
+          <div><dt>Status</dt><dd id="fact-ready" class="readiness" data-state="unknown">checking</dd></div>
+        </dl>
+        <button type="button" id="theme-toggle" class="quiet-button" aria-label="Switch color theme">Theme: system</button>
+      </div>
+      <form id="key-form" class="key-form" autocomplete="off">
+        <label for="api-key">API key</label>
+        <input id="api-key" name="api-key" type="password" spellcheck="false" autocomplete="off" placeholder="Paste your API key">
+        <button type="submit" class="button">Use key</button>
+        <p id="key-status" class="key-status" role="status">Enter an API key to see your uploads and start one.</p>
+      </form>
+    </header>
+
+    <main>
+      <section id="upload" class="panel" aria-labelledby="upload-title">
+        <div class="panel-head">
+          <h2 id="upload-title">Upload</h2>
+        </div>
+        <details class="explainer">
+          <summary>How uploads work</summary>
+          <p>The file is sent in chunks: equal-sized pieces uploaded separately, several at a time. The server checks each chunk against its SHA-256 checksum, so a damaged piece is rejected instead of stored. If the transfer stops, choose the same file again to resume: only chunks the server is missing are sent.</p>
+        </details>
+        <div class="file-row">
+          <label class="button file-button" for="file-input">Choose file</label>
+          <input id="file-input" type="file" class="visually-hidden">
+          <p id="file-summary" class="file-summary">No file chosen.</p>
+        </div>
+        <p id="plan" class="plan" hidden></p>
+        <p id="plan-problem" class="problem" role="alert" hidden></p>
+        <details id="advanced" class="advanced">
+          <summary>Advanced options</summary>
+          <div class="advanced-grid">
+            <label for="parallelism">Chunks in parallel</label>
+            <input id="parallelism" type="number" min="1" value="4" inputmode="numeric">
+            <p class="hint" id="parallelism-hint"></p>
+            <label class="checkbox-label"><input id="whole-checksum" type="checkbox"> Verify the whole file after upload</label>
+            <p class="hint" id="whole-checksum-hint">The browser computes the file's SHA-256 before sending; the server compares it with what it stored and marks the upload COMPLETED only if they match.</p>
+          </div>
+        </details>
+        <div class="actions">
+          <button type="button" id="start-upload" class="button primary" disabled>Start upload</button>
+          <button type="button" id="resume-upload" class="button" hidden>Resume upload</button>
+        </div>
+      </section>
+
+      <section id="transfer" class="panel" aria-labelledby="transfer-title">
+        <div class="panel-head">
+          <h2 id="transfer-title">Transfer</h2>
+          <p id="transfer-status" class="panel-note">Nothing is being sent.</p>
+        </div>
+        <div id="chunk-area" hidden>
+          <div id="chunk-map" class="chunk-map" tabindex="0" role="group" aria-label="Chunks of this upload. Use the arrow keys to inspect a chunk." aria-describedby="chunk-detail"></div>
+          <p id="chunk-detail" class="chunk-detail" aria-live="polite">Hover, tap or use the arrow keys on a cell to see that chunk.</p>
+          <ul class="legend" aria-label="Legend">
+            <li><span class="cell confirmed" aria-hidden="true"></span>Confirmed by server</li>
+            <li><span class="cell sending" aria-hidden="true"></span>Sending from this browser</li>
+            <li><span class="cell failed" aria-hidden="true"></span>Failed</li>
+            <li><span class="cell" aria-hidden="true"></span>Not received yet</li>
+          </ul>
+          <p id="throughput-line" class="throughput">Nothing sent from this browser yet.</p>
+        </div>
+        <ol id="events" class="events" aria-label="What happened" aria-live="polite"></ol>
+      </section>
+
+      <div class="split">
+        <section id="uploads" class="panel" aria-labelledby="uploads-title">
+          <div class="panel-head">
+            <h2 id="uploads-title">Your uploads</h2>
+            <p class="panel-note">From the server, newest first</p>
+          </div>
+          <p id="uploads-empty" class="empty">Enter an API key to list your uploads.</p>
+          <div class="table-wrap">
+            <table id="uploads-table" hidden>
+              <thead>
+                <tr><th scope="col">File</th><th scope="col" class="num col-size">Size</th><th scope="col">Status</th><th scope="col" class="num">Chunks</th><th scope="col" class="col-activity">Last activity</th></tr>
+              </thead>
+              <tbody id="uploads-body"></tbody>
+            </table>
+          </div>
+          <button type="button" id="uploads-more" class="button" hidden>Show older uploads</button>
+          <div id="upload-detail" class="detail" hidden aria-live="polite"></div>
+        </section>
+
+        <section id="service" class="panel" aria-labelledby="service-title">
+          <div class="panel-head">
+            <h2 id="service-title">Service status</h2>
+            <p id="service-source" class="panel-note">Waiting for the first report</p>
+          </div>
+          <dl id="service-facts" class="facts"></dl>
+          <p class="service-foot">Each refresh may reach a different instance. <a href="/metrics">Prometheus metrics</a></p>
+        </section>
+      </div>
+
+      <details id="developer" class="panel developer">
+        <summary><h2>Developer details</h2></summary>
+        <p class="panel-note">Every request this page sent, newest first. Request IDs match the server logs.</p>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th scope="col">Time</th><th scope="col">Method</th><th scope="col">Path</th><th scope="col" class="num">Status</th><th scope="col" class="num">ms</th><th scope="col">Request ID</th></tr>
+            </thead>
+            <tbody id="request-log"></tbody>
+          </table>
+        </div>
+      </details>
+    </main>
+  </body>
+</html>

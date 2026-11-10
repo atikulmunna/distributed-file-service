@@ -1,15 +1,27 @@
+# The image copies only app/, alembic/, alembic.ini, scripts/ and requirements.txt. Everything below
+# is kept out of the build context too: secrets, local data, tests, and local-only documents.
 .git
 .github
+.env
+.env.*
+.venv
+venv
 __pycache__
 *.pyc
 .pytest_cache
-.venv
-venv
-.env
+.ruff_cache
+.superpowers
+.claude
 data
-benchmarks/results
-distributed_file_service.db
-local_benchmark.db
-migration_check.db
-migration_check_2.db
-auth_migration_check.db
+*.db
+benchmarks
+docs
+tests
+monitoring
+deploy
+tasks.md
+CLAUDE.md
+*_Spec.md
+*srs*
+*SRS*
+desktop.ini

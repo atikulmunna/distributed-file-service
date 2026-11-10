@@ -1,0 +1,25 @@
+{
+  "description": "One 5 GiB file (the spec's size target): 640 chunks of 8 MiB, 8 in parallel, then download and verify the SHA-256.",
+  "where": {
+    "host": "Windows 11 (10.0.26300), 32 logical CPUs, 31 GiB RAM",
+    "docker": "Docker Desktop, engine 29.9.2; its Linux VM has 4 CPUs and 7.8 GB",
+    "server": "one app container (one uvicorn process) from commit 9ecad34, Postgres 16, Versity S3 gateway v1.10.0 (posix backend on a Docker volume), all in that VM",
+    "client": "scripts/load_test.py on the Windows host (Python 3.12.13, httpx 0.28.1) through Docker's port forwarding to localhost:8001",
+    "config": "defaults: 16 storage workers, DB pool 10 + 10, 8 chunks in flight per upload, global in-flight 128, queue 512, download_prefetch 1 (the default when these runs were made)"
+  },
+  "command": "python scripts/load_test.py --base-url http://localhost:8001 --files 1 --file-size-bytes 5368709120 --chunk-size-bytes 8388608 --concurrent-files 1 --per-file-chunk-workers 8 --download",
+  "run": {
+    "uploads_ok": 1,
+    "uploads": 1,
+    "upload_mib_per_s": 75.435,
+    "chunk_p50_ms": 630.735,
+    "chunk_p95_ms": 810.847,
+    "chunk_p99_ms": 1077.635,
+    "chunks": 640,
+    "download_mib_per_s": 146.616,
+    "downloads_verified": 1,
+    "retries": 0,
+    "retry_rate": 0.0,
+    "errors": {}
+  }
+}

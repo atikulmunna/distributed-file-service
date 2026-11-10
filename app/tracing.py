@@ -22,5 +22,6 @@ def setup_tracing(app) -> None:
     provider.add_span_processor(processor)
 
     trace.set_tracer_provider(provider)
-    FastAPIInstrumentor.instrument_app(app, tracer_provider=provider)
+    # Download links are credentials: no spans (whose attributes hold the URL) for them.
+    FastAPIInstrumentor.instrument_app(app, tracer_provider=provider, excluded_urls="/v1/downloads/")
     _tracing_initialized = True

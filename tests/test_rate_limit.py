@@ -1,28 +1,11 @@
 from fastapi.testclient import TestClient
-from sqlalchemy import delete
 
-from app.auth import api_key_rate_limiter
 from app.config import settings
-from app.db import Base, SessionLocal, engine
 from app.main import app
-from app.models import Chunk, ChunkRequestIdempotency, CompleteRequestIdempotency, InitRequestIdempotency, Upload
-
-
-def _reset_state() -> None:
-    Base.metadata.drop_all(bind=engine)
-    Base.metadata.create_all(bind=engine)
-    with SessionLocal() as db:
-        db.execute(delete(ChunkRequestIdempotency))
-        db.execute(delete(CompleteRequestIdempotency))
-        db.execute(delete(InitRequestIdempotency))
-        db.execute(delete(Chunk))
-        db.execute(delete(Upload))
-        db.commit()
-    api_key_rate_limiter.reset()
+from app.ratelimit import rate_limiter
 
 
 def test_api_key_rate_limit_enforced() -> None:
-    _reset_state()
     old_limit = settings.api_rate_limit_per_minute
     settings.api_rate_limit_per_minute = 2
     try:
@@ -42,4 +25,4 @@ def test_api_key_rate_limit_enforced() -> None:
             assert payload["error_code"] == "throttled"
     finally:
         settings.api_rate_limit_per_minute = old_limit
-        api_key_rate_limiter.reset()
+        rate_limiter.reset()

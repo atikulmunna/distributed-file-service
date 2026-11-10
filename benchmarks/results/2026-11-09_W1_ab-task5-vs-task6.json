@@ -1,0 +1,161 @@
+{
+  "description": "Interleaved A/B of workload W1: Task 5 code (0d362ca) on port 8002 vs Task 6 code (8337d70) on port 8001, same bench stack.",
+  "method": "6 rounds; rounds 1 to 3 ran prev then new, rounds 4 to 6 ran new then prev; paired by round",
+  "server_code": {
+    "prev": "0d362ca",
+    "new": "8337d70"
+  },
+  "runs": {
+    "prev": [
+      {
+        "timestamp_utc": "2026-11-09T11:44:18+00:00",
+        "upload_mib_per_s": 71.816,
+        "download_mib_per_s": 164.65,
+        "chunk_p50_ms": 2550.06,
+        "failed_files": 0,
+        "verified_downloads": 20,
+        "errors_by_status": {}
+      },
+      {
+        "timestamp_utc": "2026-11-09T11:45:18+00:00",
+        "upload_mib_per_s": 68.467,
+        "download_mib_per_s": 166.931,
+        "chunk_p50_ms": 2615.666,
+        "failed_files": 0,
+        "verified_downloads": 20,
+        "errors_by_status": {}
+      },
+      {
+        "timestamp_utc": "2026-11-09T11:46:12+00:00",
+        "upload_mib_per_s": 62.61,
+        "download_mib_per_s": 153.229,
+        "chunk_p50_ms": 2954.019,
+        "failed_files": 0,
+        "verified_downloads": 20,
+        "errors_by_status": {}
+      },
+      {
+        "timestamp_utc": "2026-11-09T11:48:04+00:00",
+        "upload_mib_per_s": 70.443,
+        "download_mib_per_s": 156.098,
+        "chunk_p50_ms": 2570.499,
+        "failed_files": 0,
+        "verified_downloads": 20,
+        "errors_by_status": {}
+      },
+      {
+        "timestamp_utc": "2026-11-09T11:49:06+00:00",
+        "upload_mib_per_s": 42.629,
+        "download_mib_per_s": 144.393,
+        "chunk_p50_ms": 3688.766,
+        "failed_files": 0,
+        "verified_downloads": 20,
+        "errors_by_status": {}
+      },
+      {
+        "timestamp_utc": "2026-11-09T11:50:29+00:00",
+        "upload_mib_per_s": 57.376,
+        "download_mib_per_s": 178.889,
+        "chunk_p50_ms": 2134.054,
+        "failed_files": 0,
+        "verified_downloads": 20,
+        "errors_by_status": {}
+      }
+    ],
+    "new": [
+      {
+        "timestamp_utc": "2026-11-09T11:44:45+00:00",
+        "upload_mib_per_s": 56.072,
+        "download_mib_per_s": 155.641,
+        "chunk_p50_ms": 2475.804,
+        "failed_files": 0,
+        "verified_downloads": 20,
+        "errors_by_status": {}
+      },
+      {
+        "timestamp_utc": "2026-11-09T11:45:46+00:00",
+        "upload_mib_per_s": 77.072,
+        "download_mib_per_s": 165.327,
+        "chunk_p50_ms": 2492.063,
+        "failed_files": 0,
+        "verified_downloads": 20,
+        "errors_by_status": {}
+      },
+      {
+        "timestamp_utc": "2026-11-09T11:46:43+00:00",
+        "upload_mib_per_s": 56.436,
+        "download_mib_per_s": 161.875,
+        "chunk_p50_ms": 2780.164,
+        "failed_files": 0,
+        "verified_downloads": 20,
+        "errors_by_status": {}
+      },
+      {
+        "timestamp_utc": "2026-11-09T11:47:31+00:00",
+        "upload_mib_per_s": 53.244,
+        "download_mib_per_s": 169.56,
+        "chunk_p50_ms": 2948.901,
+        "failed_files": 0,
+        "verified_downloads": 20,
+        "errors_by_status": {}
+      },
+      {
+        "timestamp_utc": "2026-11-09T11:48:33+00:00",
+        "upload_mib_per_s": 54.499,
+        "download_mib_per_s": 154.585,
+        "chunk_p50_ms": 2732.027,
+        "failed_files": 0,
+        "verified_downloads": 20,
+        "errors_by_status": {}
+      },
+      {
+        "timestamp_utc": "2026-11-09T11:49:47+00:00",
+        "upload_mib_per_s": 40.345,
+        "download_mib_per_s": 153.266,
+        "chunk_p50_ms": 5314.487,
+        "failed_files": 0,
+        "verified_downloads": 20,
+        "errors_by_status": {}
+      }
+    ]
+  },
+  "median": {
+    "prev": {
+      "upload_mib_per_s": 65.5385,
+      "download_mib_per_s": 160.37400000000002,
+      "chunk_p50_ms": 2593.0825
+    },
+    "new": {
+      "upload_mib_per_s": 55.2855,
+      "download_mib_per_s": 158.75799999999998,
+      "chunk_p50_ms": 2756.0955000000004
+    }
+  },
+  "paired_diff_new_minus_prev": {
+    "upload_mib_per_s": [
+      -15.7,
+      8.6,
+      -6.2,
+      -17.2,
+      11.9,
+      -17.0
+    ],
+    "download_mib_per_s": [
+      -9.0,
+      -1.6,
+      8.6,
+      13.5,
+      10.2,
+      -25.6
+    ],
+    "chunk_p50_ms": [
+      -74.3,
+      -123.6,
+      -173.9,
+      378.4,
+      -956.7,
+      3180.4
+    ]
+  },
+  "interpretation": "No regression attributable to the code. Upload paired differences split 4 slower / 2 faster, download and chunk latency show no consistent change, and consecutive runs of the same code vary by up to 15 MiB/s on this machine. The only added per-chunk cost on the event loop (accumulating the body) was measured at 0.73 ms vs 0.17 ms per 8 MiB chunk, about 90 ms over a whole W1 run; it was switched to the cheaper list-and-join afterwards. All 120 uploads and downloads completed and verified on both sides. W2 on the new code: 100/100 uploads, no errors."
+}

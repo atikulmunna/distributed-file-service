@@ -1,0 +1,150 @@
+{
+  "description": "Thread-pool autoscaler on vs off (same image, e029ad5 code), W1 and W2, 3 interleaved rounds each. fixed: AUTOSCALE_ENABLED=false (16 workers); autoscale: AUTOSCALE_ENABLED=true (min 8, max 32, starts at 16).",
+  "runs": {
+    "W1": {
+      "fixed": [
+        {
+          "round": 1,
+          "ok": 20,
+          "up": 104.876,
+          "p50": 1925.313,
+          "p95": 2747.349,
+          "p99": 2783.118,
+          "errors": {}
+        },
+        {
+          "round": 2,
+          "ok": 20,
+          "up": 80.09,
+          "p50": 2617.67,
+          "p95": 4369.495,
+          "p99": 4421.605,
+          "errors": {}
+        },
+        {
+          "round": 3,
+          "ok": 20,
+          "up": 90.682,
+          "p50": 2585.886,
+          "p95": 3160.441,
+          "p99": 3226.164,
+          "errors": {}
+        }
+      ],
+      "autoscale": [
+        {
+          "round": 1,
+          "ok": 20,
+          "up": 98.944,
+          "p50": 2120.706,
+          "p95": 2875.439,
+          "p99": 2916.227,
+          "errors": {}
+        },
+        {
+          "round": 2,
+          "ok": 20,
+          "up": 85.935,
+          "p50": 2307.818,
+          "p95": 3139.523,
+          "p99": 3254.524,
+          "errors": {}
+        },
+        {
+          "round": 3,
+          "ok": 20,
+          "up": 82.287,
+          "p50": 2679.723,
+          "p95": 3490.153,
+          "p99": 3585.561,
+          "errors": {}
+        }
+      ]
+    },
+    "W2": {
+      "fixed": [
+        {
+          "round": 1,
+          "ok": 100,
+          "up": 66.279,
+          "p50": 9119.917,
+          "p95": 16734.942,
+          "p99": 17586.795,
+          "errors": {}
+        },
+        {
+          "round": 2,
+          "ok": 100,
+          "up": 75.892,
+          "p50": 7784.972,
+          "p95": 14332.409,
+          "p99": 15268.51,
+          "errors": {}
+        },
+        {
+          "round": 3,
+          "ok": 100,
+          "up": 80.988,
+          "p50": 7172.85,
+          "p95": 14100.622,
+          "p99": 14839.815,
+          "errors": {}
+        }
+      ],
+      "autoscale": [
+        {
+          "round": 1,
+          "ok": 100,
+          "up": 65.533,
+          "p50": 9049.446,
+          "p95": 16612.194,
+          "p99": 17478.807,
+          "errors": {}
+        },
+        {
+          "round": 2,
+          "ok": 100,
+          "up": 63.47,
+          "p50": 8771.464,
+          "p95": 18213.009,
+          "p99": 19043.203,
+          "errors": {}
+        },
+        {
+          "round": 3,
+          "ok": 100,
+          "up": 85.895,
+          "p50": 6953.054,
+          "p95": 13192.907,
+          "p99": 13864.758,
+          "errors": {}
+        }
+      ]
+    }
+  },
+  "median": {
+    "W1": {
+      "fixed": {
+        "upload_mib_per_s": 90.682,
+        "chunk_p95_ms": 3160.441
+      },
+      "autoscale": {
+        "upload_mib_per_s": 85.935,
+        "chunk_p95_ms": 3139.523
+      }
+    },
+    "W2": {
+      "fixed": {
+        "upload_mib_per_s": 75.892,
+        "chunk_p95_ms": 14332.409
+      },
+      "autoscale": {
+        "upload_mib_per_s": 65.533,
+        "chunk_p95_ms": 16612.194
+      }
+    }
+  },
+  "decision_rule": "keep the autoscaler only if it improves throughput or chunk p95 by at least 5% (tasks.md, Task 15)",
+  "decision": "remove the autoscaler",
+  "interpretation": "Autoscaling improved neither metric: W1 throughput -5.2% and p95 -0.7% (flat); W2 throughput -13.6% and p95 +15.9%. Paired differences are mixed, so this does not show it hurts, only that it does not help. All 240 uploads completed in both modes."
+}
