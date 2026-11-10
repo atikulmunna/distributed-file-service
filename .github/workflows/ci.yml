@@ -5,33 +5,91 @@ on:
     branches: ["main"]
   pull_request:
     branches: ["main"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python and dependencies
+        uses: ./.github/actions/setup
+
+      - name: Lint
+        run: ruff check app tests scripts alembic
+
+      - name: Formatting
+        run: ruff format --check app tests scripts alembic
+
+      - name: Type check
+        run: mypy
+
+  audit:
+    # Known vulnerabilities in every locked package, transitive ones included.
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python and dependencies
+        uses: ./.github/actions/setup
+
+      - name: Audit the locked dependencies
+        run: pip-audit -r requirements.lock --require-hashes --disable-pip --progress-spinner off
+
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build the image
+        run: docker build -t dfs:ci .
+
+      - name: Runs as an unprivileged user
+        run: |
+          uid=$(docker run --rm dfs:ci id -u)
+          echo "uid=$uid"
+          test "$uid" != "0"
+
+      - name: Contains no compiler
+        run: docker run --rm dfs:ci sh -c '! command -v gcc && ! command -v cc'
+
+      - name: Refuses the development keys (the image defaults to production)
+        run: |
+          if out=$(timeout 60 docker run --rm dfs:ci 2>&1); then
+            echo "the image started with the development keys"; exit 1
+          fi
+          echo "$out" | grep "refusing to start in production"
+
+      - name: Image size
+        run: docker image inspect dfs:ci --format '{{.Size}}' | awk '{ printf "%.1f MB\n", $1 / 1e6 }'
+
   test-sqlite:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-          cache-dependency-path: requirements*.txt
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt -r requirements-dev.txt
+      - name: Set up Python and dependencies
+        uses: ./.github/actions/setup
 
       - name: Run Alembic migrations on a clean SQLite DB
         env:
           DATABASE_URL: sqlite:///./ci_migration_check.db
         run: alembic upgrade head
 
-      - name: Run tests on SQLite
-        run: pytest -q
+      - name: Run tests on SQLite, with the coverage floor (pyproject.toml)
+        run: pytest -q --cov=app --cov-report=term
 
   test-postgres:
     runs-on: ubuntu-latest
@@ -56,17 +114,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-          cache-dependency-path: requirements*.txt
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt -r requirements-dev.txt
+      - name: Set up Python and dependencies
+        uses: ./.github/actions/setup
 
       - name: Run Alembic migrations on a clean Postgres DB
         run: alembic upgrade head
@@ -93,17 +142,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-          cache-dependency-path: requirements*.txt
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt -r requirements-dev.txt
+      - name: Set up Python and dependencies
+        uses: ./.github/actions/setup
 
       - name: Start Versity Gateway
         run: |
@@ -141,17 +181,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-          cache-dependency-path: requirements*.txt
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt -r requirements-dev.txt
+      - name: Set up Python and dependencies
+        uses: ./.github/actions/setup
 
       - name: Run Redis job queue integration tests
         run: pytest -q tests/test_redis_jobs_integration_optional.py
@@ -165,17 +196,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-          cache-dependency-path: requirements*.txt
-
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt -r requirements-dev.txt
+      - name: Set up Python and dependencies
+        uses: ./.github/actions/setup
 
       - name: Start the cluster
         run: |

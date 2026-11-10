@@ -19,3 +19,9 @@ tasks.md
 *_Spec.md
 docs/superpowers/
 desktop.ini
+
+# Coverage output
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
