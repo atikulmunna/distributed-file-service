@@ -20,6 +20,7 @@ Every statement below links to the test or benchmark result that backs it.
 - [Known limitations](#known-limitations)
 - [Future work](#future-work)
 - [Project layout](#project-layout)
+- [License](#license)
 
 ## Quick start
 
@@ -292,3 +293,7 @@ monitoring/          Prometheus alerts and a Grafana dashboard
 benchmarks/results/  every measurement referenced above
 docs/                the demo GIF and screenshots
 ```
+
+## License
+
+MIT, see [`LICENSE`](LICENSE). The vendored [hash-wasm](app/static/vendor/hash-wasm) keeps its own MIT license.
