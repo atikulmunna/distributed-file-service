@@ -6,7 +6,9 @@ import threading
 import time
 import types
 
-from app.config import settings
+import pytest
+
+from app.config import Settings, settings
 from app.db import engine
 from app.download import Piece, iter_pieces, object_pieces
 from app.layout import ChunkLayout
@@ -103,6 +105,7 @@ def test_empty_file_download_has_zero_length(client, auth_headers) -> None:
 
 
 def _spy_iter_range(monkeypatch) -> list[tuple[str, int, int]]:
+    monkeypatch.setattr(settings, "download_prefetch", 1)  # the streaming mode: one ranged read per piece
     reads: list[tuple[str, int, int]] = []
     real = storage.iter_range
 
@@ -122,6 +125,13 @@ def test_range_near_end_reads_only_needed_bytes(client, auth_headers, monkeypatc
     assert response.status_code == 206
     assert response.content == data[17:20]
     assert reads == [(f"uploads/{upload_id}/chunk_3", 2, 4)]  # one streaming ranged read per piece
+
+
+def test_default_download_mode_is_parallel_ranged_reads() -> None:
+    # Chosen from the real-S3 measurement (benchmarks/results/2026-11-11_s3_download-prefetch.json).
+    defaults = Settings(_env_file=None)
+    assert defaults.download_prefetch == 4
+    assert defaults.download_segment_bytes == 8 * 1024 * 1024
 
 
 def test_parallel_mode_also_reads_only_needed_bytes(client, auth_headers, monkeypatch) -> None:
@@ -150,16 +160,23 @@ def test_range_across_chunk_boundaries(client, auth_headers) -> None:
     assert response.content == data[3:22]
 
 
-def test_no_db_connection_held_while_streaming(client, auth_headers, monkeypatch) -> None:
+@pytest.mark.parametrize("prefetch", [1, 4])
+def test_no_db_connection_held_while_streaming(client, auth_headers, monkeypatch, prefetch) -> None:
+    monkeypatch.setattr(settings, "download_prefetch", prefetch)
     upload_id = _completed(client, auth_headers, b"0123456789", 5)
     held: list[int] = []
-    real = storage.iter_range
+    real_stream, real_read = storage.iter_range, storage.read_range
 
-    def observed(key: str, start: int, end: int, block_size: int = 8 * 1024 * 1024):
+    def observed_stream(key: str, start: int, end: int, block_size: int = 8 * 1024 * 1024):
         held.append(engine.pool.checkedout())
-        yield from real(key, start, end, block_size)
+        yield from real_stream(key, start, end, block_size)
 
-    monkeypatch.setattr(storage, "iter_range", observed)
+    def observed_read(key: str, start: int, end: int) -> bytes:
+        held.append(engine.pool.checkedout())
+        return real_read(key, start, end)
+
+    monkeypatch.setattr(storage, "iter_range", observed_stream)
+    monkeypatch.setattr(storage, "read_range", observed_read)
     assert _get(client, auth_headers, upload_id).status_code == 200
     assert held
     assert set(held) == {0}

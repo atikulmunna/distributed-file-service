@@ -299,6 +299,7 @@ def test_multipart_download_streams_the_assembled_object(client, auth_headers, m
         read_keys.append(key)
         yield b"aaaaabbbbb"[start : end + 1]
 
+    monkeypatch.setattr(settings, "download_prefetch", 1)  # one streaming read per piece
     monkeypatch.setattr(storage, "iter_range", stream_assembled)
     monkeypatch.setattr(storage, "read_chunk", lambda key: pytest.fail(f"read a per-chunk object {key}"))
 

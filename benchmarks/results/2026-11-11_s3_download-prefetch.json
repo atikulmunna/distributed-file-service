@@ -1,0 +1,210 @@
+{
+  "description": "Download read-ahead on real S3: W3 (one 1 GiB file, 8 MiB chunks, upload then download and verify) under four download settings, 3 interleaved rounds; plus W1 (20 x 64 MiB, 8 concurrent) with the defaults of the time.",
+  "where": {
+    "instance": "c6i.xlarge (4 vCPU, 8 GiB), Amazon Linux 2023, us-east-1; the app, Postgres 16 and the load test on the same instance",
+    "storage": "Amazon S3 bucket in us-east-1 (same region, no data transfer charge)",
+    "kernel": "Linux ip-172-31-42-9.ec2.internal 6.18.56-126.188.amzn2023.x86_64",
+    "code": "9ecad348741a8b01d32e39705bfe500b4cd9dbc8",
+    "date": "2026-11-11"
+  },
+  "method": "Each setting restarts the app container with DOWNLOAD_PREFETCH and DOWNLOAD_SEGMENT_BYTES; rounds interleave the settings. W3 runs scripts/load_test.py --workload W3; W1 runs --workload W1 with prefetch 1 (the default when this was measured).",
+  "w3": {
+    "prefetch_1_segment_8MiB": {
+      "runs": [
+        {
+          "uploads_ok": 1,
+          "upload_mib_per_s": 184.248,
+          "chunk_p50_ms": 317.825,
+          "chunk_p95_ms": 420.312,
+          "chunk_p99_ms": 468.714,
+          "download_mib_per_s": 76.01,
+          "downloads_verified": 1,
+          "retries": 0,
+          "errors": {}
+        },
+        {
+          "uploads_ok": 1,
+          "upload_mib_per_s": 181.144,
+          "chunk_p50_ms": 330.272,
+          "chunk_p95_ms": 403.226,
+          "chunk_p99_ms": 434.266,
+          "download_mib_per_s": 64.342,
+          "downloads_verified": 1,
+          "retries": 0,
+          "errors": {}
+        },
+        {
+          "uploads_ok": 1,
+          "upload_mib_per_s": 184.907,
+          "chunk_p50_ms": 321.315,
+          "chunk_p95_ms": 445.06,
+          "chunk_p99_ms": 483.582,
+          "download_mib_per_s": 84.681,
+          "downloads_verified": 1,
+          "retries": 0,
+          "errors": {}
+        }
+      ],
+      "median_download_mib_per_s": 76.0,
+      "median_upload_mib_per_s": 184.2
+    },
+    "prefetch_4_segment_8MiB": {
+      "runs": [
+        {
+          "uploads_ok": 1,
+          "upload_mib_per_s": 190.298,
+          "chunk_p50_ms": 289.013,
+          "chunk_p95_ms": 519.869,
+          "chunk_p99_ms": 649.391,
+          "download_mib_per_s": 284.116,
+          "downloads_verified": 1,
+          "retries": 0,
+          "errors": {}
+        },
+        {
+          "uploads_ok": 1,
+          "upload_mib_per_s": 187.43,
+          "chunk_p50_ms": 317.161,
+          "chunk_p95_ms": 401.844,
+          "chunk_p99_ms": 425.386,
+          "download_mib_per_s": 292.63,
+          "downloads_verified": 1,
+          "retries": 0,
+          "errors": {}
+        },
+        {
+          "uploads_ok": 1,
+          "upload_mib_per_s": 184.175,
+          "chunk_p50_ms": 321.11,
+          "chunk_p95_ms": 422.899,
+          "chunk_p99_ms": 448.898,
+          "download_mib_per_s": 280.551,
+          "downloads_verified": 1,
+          "retries": 0,
+          "errors": {}
+        }
+      ],
+      "median_download_mib_per_s": 284.1,
+      "median_upload_mib_per_s": 187.4
+    },
+    "prefetch_8_segment_8MiB": {
+      "runs": [
+        {
+          "uploads_ok": 1,
+          "upload_mib_per_s": 180.491,
+          "chunk_p50_ms": 324.737,
+          "chunk_p95_ms": 408.947,
+          "chunk_p99_ms": 480.598,
+          "download_mib_per_s": 321.223,
+          "downloads_verified": 1,
+          "retries": 0,
+          "errors": {}
+        },
+        {
+          "uploads_ok": 1,
+          "upload_mib_per_s": 181.46,
+          "chunk_p50_ms": 321.618,
+          "chunk_p95_ms": 399.063,
+          "chunk_p99_ms": 454.893,
+          "download_mib_per_s": 288.277,
+          "downloads_verified": 1,
+          "retries": 0,
+          "errors": {}
+        },
+        {
+          "uploads_ok": 1,
+          "upload_mib_per_s": 183.869,
+          "chunk_p50_ms": 320.77,
+          "chunk_p95_ms": 423.062,
+          "chunk_p99_ms": 434.684,
+          "download_mib_per_s": 322.386,
+          "downloads_verified": 1,
+          "retries": 0,
+          "errors": {}
+        }
+      ],
+      "median_download_mib_per_s": 321.2,
+      "median_upload_mib_per_s": 181.5
+    },
+    "prefetch_8_segment_16MiB": {
+      "runs": [
+        {
+          "uploads_ok": 1,
+          "upload_mib_per_s": 184.438,
+          "chunk_p50_ms": 319.169,
+          "chunk_p95_ms": 410.686,
+          "chunk_p99_ms": 449.284,
+          "download_mib_per_s": 382.912,
+          "downloads_verified": 1,
+          "retries": 0,
+          "errors": {}
+        },
+        {
+          "uploads_ok": 1,
+          "upload_mib_per_s": 183.378,
+          "chunk_p50_ms": 330.416,
+          "chunk_p95_ms": 411.81,
+          "chunk_p99_ms": 434.378,
+          "download_mib_per_s": 363.61,
+          "downloads_verified": 1,
+          "retries": 0,
+          "errors": {}
+        },
+        {
+          "uploads_ok": 1,
+          "upload_mib_per_s": 178.866,
+          "chunk_p50_ms": 324.974,
+          "chunk_p95_ms": 421.121,
+          "chunk_p99_ms": 433.365,
+          "download_mib_per_s": 324.228,
+          "downloads_verified": 1,
+          "retries": 0,
+          "errors": {}
+        }
+      ],
+      "median_download_mib_per_s": 363.6,
+      "median_upload_mib_per_s": 183.4
+    }
+  },
+  "w1_prefetch_1": {
+    "runs": [
+      {
+        "uploads_ok": 20,
+        "upload_mib_per_s": 167.876,
+        "chunk_p50_ms": 1190.763,
+        "chunk_p95_ms": 1717.97,
+        "chunk_p99_ms": 1934.825,
+        "download_mib_per_s": 457.004,
+        "downloads_verified": 20,
+        "retries": 0,
+        "errors": {}
+      },
+      {
+        "uploads_ok": 20,
+        "upload_mib_per_s": 172.332,
+        "chunk_p50_ms": 1214.794,
+        "chunk_p95_ms": 1672.09,
+        "chunk_p99_ms": 1899.679,
+        "download_mib_per_s": 429.726,
+        "downloads_verified": 20,
+        "retries": 0,
+        "errors": {}
+      },
+      {
+        "uploads_ok": 20,
+        "upload_mib_per_s": 166.284,
+        "chunk_p50_ms": 1204.396,
+        "chunk_p95_ms": 1665.871,
+        "chunk_p99_ms": 1833.829,
+        "download_mib_per_s": 436.357,
+        "downloads_verified": 20,
+        "retries": 0,
+        "errors": {}
+      }
+    ],
+    "median_upload_mib_per_s": 167.9,
+    "median_download_mib_per_s": 436.4
+  },
+  "decision": "download_prefetch default 1 -> 4 (8 MiB segments): 3.7x the single-file download rate on S3 for about 40 MiB of buffers per download. 8 is faster still (321, or 364 MiB/s with 16 MiB segments) at 72 or 144 MiB per download.",
+  "interpretation": "On S3 each GET waits on a network round trip, so one sequential stream per piece is latency-bound (about 76 MiB/s). Parallel ranged GETs overlap those waits. On the local bench stack the opposite held (near-zero latency; parallel ranged reads were about 10% slower), so the default follows the production storage and same-host storage can set DOWNLOAD_PREFETCH=1. Uploads did not depend on the download setting (about 183 MiB/s for one file in every configuration). All 15 runs uploaded and verified every file with zero retries or errors."
+}
