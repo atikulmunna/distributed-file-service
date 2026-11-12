@@ -12,6 +12,7 @@ from functools import partial
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 from sqlalchemy import and_, func, or_, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 from starlette.requests import ClientDisconnect
@@ -29,7 +30,7 @@ from app.db import SessionLocal, get_db
 from app.download import DownloadPlan, content_disposition, ensure_downloadable, iter_pieces, prepare_download
 from app.layout import ChunkLayout
 from app.limits import PerUploadInflightLimiter
-from app.logging_utils import audit_event, request_id_of
+from app.logging_utils import audit_event, log_event, request_id_of
 from app.metrics import (
     chunk_upload_failures_total,
     retries_total,
@@ -124,6 +125,35 @@ def _fingerprint(obj: dict) -> str:
     return hashlib.sha256(json.dumps(obj, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 
 
+def _abort_unused_multipart(upload_id: str, multipart_upload_id: str | None) -> None:
+    """Best effort: the bucket rule for incomplete multipart uploads removes anything left behind."""
+    if not multipart_upload_id:
+        return
+    try:
+        storage.abort_upload(upload_id, multipart_upload_id)
+    except Exception as exc:  # noqa: BLE001  logged; an unfinished multipart upload is cleaned up later
+        log_event({"event": "init_race_abort_error", "upload_id": upload_id, "detail": str(exc)})
+
+
+def _replay_init(db: Session, stored_key: str, request_fingerprint: str) -> InitUploadResponse | None:
+    """The upload an earlier init with this (user-scoped) key created, or None. A different payload under
+    the same key is a 409."""
+    existing_request = db.get(InitRequestIdempotency, stored_key)
+    if existing_request is None:
+        return None
+    if existing_request.request_fingerprint != request_fingerprint:
+        raise HTTPException(status_code=409, detail="idempotency key reused with different init payload")
+    existing_upload = db.get(Upload, existing_request.upload_id)
+    if existing_upload is None:
+        return None
+    return InitUploadResponse(
+        upload_id=existing_upload.id,
+        chunk_size=existing_upload.chunk_size,
+        total_chunks=existing_upload.total_chunks,
+        status=existing_upload.status,
+    )
+
+
 @router.post(
     "/v1/uploads/init",
     response_model=InitUploadResponse,
@@ -149,18 +179,9 @@ def init_upload(
     )
     stored_key = scoped_idempotency_key(user, idempotency_key) if idempotency_key else None
     if stored_key:
-        existing_request = db.get(InitRequestIdempotency, stored_key)
-        if existing_request:
-            if existing_request.request_fingerprint != request_fingerprint:
-                raise HTTPException(status_code=409, detail="idempotency key reused with different init payload")
-            existing_upload = db.get(Upload, existing_request.upload_id)
-            if existing_upload:
-                return InitUploadResponse(
-                    upload_id=existing_upload.id,
-                    chunk_size=existing_upload.chunk_size,
-                    total_chunks=existing_upload.total_chunks,
-                    status=existing_upload.status,
-                )
+        replay = _replay_init(db, stored_key, request_fingerprint)
+        if replay is not None:
+            return replay
 
     # End the read transaction so no DB connection is held during the storage call below.
     db.rollback()
@@ -195,7 +216,19 @@ def init_upload(
                 request_fingerprint=request_fingerprint,
             )
         )
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        # A concurrent init with the same key committed between our lookup and this commit. Our upload
+        # row is rolled back with the transaction; answer as a replay would.
+        db.rollback()
+        if not stored_key:
+            raise
+        _abort_unused_multipart(upload_id, multipart_upload_id)
+        replay = _replay_init(db, stored_key, request_fingerprint)
+        if replay is None:
+            raise
+        return replay
     # Do not touch the ORM object after commit: reloading it would open a new transaction and
     # hold the connection until the response is validated, which needs a free worker thread.
     status = UploadStatus.initiated.value
